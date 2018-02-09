@@ -8,8 +8,8 @@
 % invariance
 
 % input
-% type = filter type {'butter', 'cheby1', 'ellipt', 'gaussian',
-% 'bessel', 'fir', 'lorentzian', 'fbg'}
+% type = filter type {'butter', 'cheby1', 'ellipt', 'two-pole', 'gaussian',
+% 'bessel', 'fir1', 'lorentzian', 'fbg'}
 % order = filter order
 % fcnorm = normalized cutoff frequency. fcnorm = f3dB/(fs/2). 0 < fcnorm < 1
 % Mct = oversampling ratio to simulate continuous time
@@ -79,11 +79,15 @@ switch type
     case 'matched'
         % order = pulse shape function
         % fcnorm = 1 / oversampling factor
-        nmax = 256; % more than enough 
-        pshape = order;
+        nmax = 256; % more than enough
+        if isa(order, 'function_handle')
+            pshape = order;
+        else
+            pshape =@(i) (i < length(order.h))*order.h(i+1);
+        end
         Mct = 1/fcnorm;
         
-        cumenergy = cumsum(abs(pshape(0:nmax-1)).^2)/sum(abs(pshape(0:nmax-1)).^2);
+        cumenergy = cumsum(abs(pshape(0,nmax-1)).^2)/sum(abs(pshape(0,nmax-1)).^2);
         nlength = find(cumenergy >= 0.9999, 1, 'first');
         
         num = conj(pshape(nlength-1:-1:0));

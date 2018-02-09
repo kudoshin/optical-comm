@@ -6,17 +6,17 @@ addpath ../apd/
 
 sim.BERtarget = 1.8e-4;
 sim.rexdB = -15;
-Lkm = 0:10;
+Lkm = 0:50;
 sim.N = 2^14;
-sim.Rb = 56e9; 
+sim.Rb = 25e9; 
 sim.Mct = 10;
-wavelength = 1380e-9; 
+wavelength = 1550e-9; 
 alpha = 0; % chirp parameter
 RIN = -150; % dB/Hz
-modBW = (10:5:50)*1e9; % 30e9;
+modBW = (logspace(0,log10(25)))*1e9; % 30e9;
 N0 = (20e-12)^2;
 eq.type ='fixed td-sr-le';
-eq.Ntaps = 9;
+eq.Ntaps = 15;
 
 %% M-PAM
 % PAM(M, bit rate, leve spacing : {'equally-spaced', 'optimized'}, pulse

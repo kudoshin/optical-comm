@@ -5,7 +5,11 @@ f = sim.f/sim.fs;
 Nhold = sim.Mct/Tx.DAC.ros;
 Hpshape = mpam.Hpshape(sim.f);
 Hdac = Tx.DAC.filt.H(f).*freqz(1/Nhold*ones(1, Nhold), 1, 2*pi*f).*exp(1j*2*pi*f*(Nhold-1)/2); % ZOH and DAC response
-Hmod = Tx.Mod.H(sim.f);
+if isa(Tx.Mod.H,'function_handle')
+    Hmod = Tx.Mod.H(sim.f);
+else
+    Hmod = Tx.Mod.H;
+end
 Hfiber = Fiber.Himdd(sim.f, Tx.Laser.wavelength, Tx.Mod.alpha, 'small signal');
 Hapd = Apd.H(sim.f);
 Hch = Hdac.*Hmod.*Hfiber.*Hapd; % tx pulse shape is not included in channel frequency response

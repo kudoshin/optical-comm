@@ -19,7 +19,7 @@ apd = apd(10*log10(300e9/mpam.Rs), 0.09, 300e9);
 PlevelsdBm = -30;
 Plevels = 1e-3*10.^(PlevelsdBm/10);
 
-pdfs = apd.levels_pdf(Plevels, mpam.Rs);
+pdfs = apd.levels_pdf(Plevels, mpam.Rs); % deprecated
 
 for k = 1:length(Plevels)
    

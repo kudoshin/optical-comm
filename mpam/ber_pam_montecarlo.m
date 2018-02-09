@@ -122,21 +122,37 @@ yt = Rx.PD.detect(Erx, sim.fs, 'gaussian', Rx.N0);
 
 fprintf('> Received power: %.2f dBm\n', PrxdBm);
 
+% Whitening filter
+if sim.WhiteningFilter
+    [~, yt] = Rx.PD.Hwhitening(sim.f, mean(abs(Erx).^2), Rx.N0, yt);
+end
+
 % Gain control
 yt = yt - mean(yt);
 yt = yt*sqrt(mean(abs(mpam.a).^2)/(sqrt(2)*mean(abs(yt).^2)));
 
+% system frequency responses
+HrxPshape = apd_system_received_pulse_shape(mpam, Tx, Fibers(1), Rx.PD, Rx, sim);
 %% ADC
 % ADC performs filtering, quantization, and downsampling
 % For an ideal ADC, ADC.ENOB = Inf
 % Rx.ADC.offset = -1; % time offset when sampling      
 Hrx = Rx.ADC.filt.H(sim.f/sim.fs);
 Rx.ADC.timeRefSignal = xt;
-[yk, ~, ytf] = adc(yt, Rx.ADC, sim);
+switch lower(Rx.filtering)
+    case 'antialiasing' % receiver filter is specified in ADC.filt
+        [yk, ~, ytf] = adc(yt, Rx.ADC, sim);
+    case 'matched' % receiver filter is matched filter
+        Hrx = conj(HrxPshape);
+        [yk, ~, ytf] = adc(yt, Rx.ADC, sim, Hrx); % replace ADC antialiasing filter by matched filter
+    otherwise
+        error('ber_preamp_sys_montecarlo: Rx.filtering must be either antialiasing or matched')
+end 
+
 
 %% =========================== Equalization ===============================
 Rx.eq.trainSeq = dataTX; % training sequence
-[yd, Rx.eq] = equalize(Rx.eq, yk, [], mpam, sim, sim.shouldPlot('Equalizer'));
+[yd, Rx.eq] = equalize(Rx.eq, yk, HrxPshape, mpam, sim, sim.shouldPlot('Equalizer'));
 
 % Symbols to be discard in BER calculation
 ndiscard = [1:Rx.eq.Ndiscard(1)+sim.Ndiscard (sim.Nsymb-Rx.eq.Ndiscard(2)-sim.Ndiscard):sim.Nsymb];
@@ -145,8 +161,8 @@ yd(ndiscard) = [];
 dataTX(ndiscard) = [];
 
 %% =========================== Detection ==============================
-% dataRX = mpam.demod(yd);
-[dataRX, mpam] = mpam.demod_sweeping_thresholds(yd, dataTX);
+dataRX = mpam.demod(yd);
+% [dataRX, mpam] = mpam.demod_sweeping_thresholds(yd, dataTX);
 % Note: when performing demodulaton sweepingn thresholds, the decision
 % thresholds will be picked to minimize BER
 
@@ -179,12 +195,12 @@ if isfield(sim, 'preAmp') && sim.preAmp % amplified system: signal-spontaneous b
     % mode, the appropriate amplifier gain was already set in montecarlo
     % simulation. The BER estimation function will assume the same amplifier gain.
 
-else % unamplified system: thermal-noise dominant
+else % unamplified system: thermal-noise dominant for PIN, shot-noise dominant for APD
     noiseSTD = Rx.PD.stdNoise(Hrx, Rx.eq.Hff(sim.f/(Rx.eq.ros*mpam.Rs)), Rx.N0, Tx.Laser.RIN, sim);
 end
 
 % AWGN approximation
-mpamRef = mpamRef.adjust_levels(Prx, -Inf); % may replace -Inf for rexdB
+mpamRef = mpamRef.adjust_levels(Prx*Rx.PD.Geff, rexdB); % may replace -Inf for rexdB
 ber_gauss = mpamRef.berAWGN(noiseSTD);
 
 %% Plots

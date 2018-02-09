@@ -13,8 +13,11 @@ sim.BERtarget = 1e-4;
 sim.Ndiscard = 16; % number of symbols to be discarded from the begning and end of the sequence
 sim.N = sim.Mct*sim.Nsymb; % number points in 'continuous-time' simulation
 
+%% Pulse shape
+pulse_shape = select_pulse_shape('rect', 1);
+
 %% M-PAM
-mpam = PAM(4, 100e9, 'equally-spaced', @(n) double(n >= 0 & n < sim.Mct));
+mpam = PAM(4, 100e9, 'equally-spaced', pulse_shape);
 
 %% Time and frequency
 sim.fs = mpam.Rs*sim.Mct;  % sampling frequency in 'continuous-time'
@@ -30,7 +33,7 @@ sim.f = f;
 %% Receiver
 rx.N0 = (20e-12).^2; % thermal noise psd
 
-matchedfilt = design_filter('matched', mpam.pshape, 1/sim.Mct);
+matchedfilt = design_filter('matched', mpam.pulse_shape, 1/sim.Mct);
 
 PtxdBm = -22:1:-10;
 Ptx = 1e-3*10.^(PtxdBm/10);
@@ -41,17 +44,17 @@ for k = 1:length(Ptx)
 
     dataTX = randi([0 mpam.M-1], 1, sim.Nsymb);
     
-    mpam.adjust_levels(Ptx(k), -Inf);
+    mpam = mpam.adjust_levels(Ptx(k), -Inf);
 
-    x = mpam.mod(dataTX, sim.Mct);
+    x = mpam.signal(dataTX);
     
     x([1:sim.Ndiscard*sim.Mct end-(0:sim.Ndiscard*sim.Mct-1 )]) = 0;
 
     p = x + sqrt(rx.N0*sim.fs/2)*randn(size(x));
 
-    pf = real(ifft(fft(p).*ifftshift(matchedfilt.H(f/sim.fs))));
+    pf = real(ifft(fft(reshape(repmat(p,sim.Mct,1),[],1)).*ifftshift(matchedfilt.H(f/sim.fs))));
 
-    y = pf(floot(sim.Mct/2):sim.Mct:end);
+    y = pf(floor(sim.Mct/2):sim.Mct:end);
         
     dataRX = mpam.demod(y);
     
@@ -59,7 +62,7 @@ for k = 1:length(Ptx)
     dataRX(ndiscard) = [];
     [~, ber.count(k)] = biterr(dataTX, dataRX);
     
-    ber.awgn(k) = mpam.ber_awgn(@(P) sqrt(rx.N0*matchedfilt.noisebw(sim.fs)));
+    ber.awgn(k) = mpam.berAWGN(@(P) sqrt(rx.N0*matchedfilt.noisebw(sim.fs)));
     
 end
 
@@ -67,3 +70,4 @@ figure, hold on, grid on, box on
 plot(PtxdBm, log10(ber.count), '-o')
 plot(PtxdBm, log10(ber.awgn), '-')
 axis([PtxdBm([1 end]) -10 0])
+legend('counted','gaussian')
