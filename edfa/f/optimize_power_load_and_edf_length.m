@@ -20,7 +20,14 @@ function [E, Signal, exitflag, num, approx] = optimize_power_load_and_edf_length
 
 % Unpack problem parameters
 Pon = problem.Pon;
+PoffdBm = Watt2dBm(eps); % assign small power to off channels
 spanAttdB = problem.spanAttdB;
+% Excess noise
+problem.excess_noise = E.analytical_excess_noise(Pump, Signal);
+if isfield(problem, 'excess_noise_correction')
+    problem.excess_noise = problem.excess_noise*problem.excess_noise_correction;
+end
+
 
 %% Optimization
 fprintf('Optimization method = %s\n', method)
@@ -28,7 +35,7 @@ switch lower(method)
     case 'fminbnd'
         %% Find EDF length that maximizes the number of ON channels
         % This uses Matlab's fminbnd function to search for the optimal fiber length
-        % (Doesn't produce very consisten results)
+        % (Doesn't produce very consistent results)
         
         [Lopt, ~, exitflag] = fminbnd(@(L) -sum(max_channels_on(L, E, Pump, Signal, Pon, spanAttdB)), 0, E.maxL);
 
@@ -47,7 +54,7 @@ switch lower(method)
         %% Find EDF length that maximizes the number of ON channels
         % Optimal EDF length is found by interpolation. Number of ON
         % channels is calculated for "Nsteps" points from EDF.L = 1 to
-        % EDF.Lmax. Optimal result is obtained by interpolatin
+        % EDF.Lmax. Optimal result is obtained by interpolation
         Nsteps = 40;
         Ledf = linspace(1, E.maxL, Nsteps); % EDF is at least a meter long
         BW = zeros(size(Ledf));
@@ -81,13 +88,7 @@ switch lower(method)
         else
             SwarmSize = min(200, 20*(Signal.N+1));
         end
-                 
-        % Excess noise
-        problem.excess_noise = E.analytical_excess_noise(Pump, Signal);
-        if isfield(problem, 'excess_noise_correction')
-            problem.excess_noise = problem.excess_noise*problem.excess_noise_correction;
-        end
-            
+                            
         la = [0 -Inf*ones(1, Signal.N)]; % lower bound
         lb = [E.maxL Watt2dBm(Pon)*ones(1, Signal.N)]; % upper bound
         options = optimoptions('particleswarm', 'Display', 'iter', 'UseParallel', true,...
@@ -96,14 +97,6 @@ switch lower(method)
                 
         if isfield(problem, 'nonlinearity') && problem.nonlinearity
             disp('IMPORTANT: optimization includes fiber nonlinearity')
-            
-            % After particle swarm is done, fmincon starts local optimization  
-            local_options = optimoptions('fmincon', 'Algorithm', 'trust-region-reflective',...
-                            'Display', 'iter', 'UseParallel', true,...
-                            'CheckGradients', true, 'SpecifyObjectiveGradient', true, 'FiniteDifferenceType', 'central',...
-                            'MaxFunctionEvaluations', 1e4);
-                       
-            options.HybridFcn = {@fmincon, local_options}; % switch to interior-point algorithm for local optimization once particle swarm is done
 
             [X, relaxed_SE, exitflag] = particleswarm(@(X) capacity_nonlinear_regime_relaxed(X, E, Pump, Signal, problem),...
                 Signal.N+1, la, lb, options);
@@ -119,12 +112,34 @@ switch lower(method)
         GaindB = E.semi_analytical_gain(Pump, Signal);
         Signal.P(GaindB <= spanAttdB) = 0; % turn off channels that don't meet gain requirement
       
+    case 'local'
+        %% Local optimizaiton using a gradient-based algorithm. Results from particle swarm optmization should be provided as starting point
+        options = optimoptions('fmincon', 'Algorithm', 'trust-region-reflective',...
+            'Display', 'iter', 'UseParallel', true,...
+            'CheckGradients', true, 'SpecifyObjectiveGradient', true, 'FiniteDifferenceType', 'central',...
+            'MaxFunctionEvaluations', 1e4);
+        
+        Signal.P(Signal.P == 0) = eps; % to respect the bounds
+        la = [0 PoffdBm*ones(1, Signal.N)]; % lower bound
+        lb = [E.maxL Watt2dBm(Pon)*ones(1, Signal.N)]; % upper bound
+        [X, ~, exitflag] = fmincon(@(X) capacity_nonlinear_regime_relaxed(X, E, Pump, Signal, problem), ...
+            [E.L Signal.PdBm], [], [], [], [], la, lb, [], options);
+
+        E.L = X(1);
+        Signal.P = dBm2Watt(X(2:end));
+        GaindB = E.semi_analytical_gain(Pump, Signal);
+        Signal.P(GaindB <= spanAttdB) = 0; % turn off channels that don't meet gain requirement
+    case 'none' % doesn't do anything. Just use this function for plotting
+        exitflag = 1;
+        GaindB = E.semi_analytical_gain(Pump, Signal);
+        Signal.P(GaindB <= spanAttdB) = 0; % turn off channels that don't meet gain requirement
     otherwise
         error('optimize_power_load_and_edf_length: invalid method')
 end
 
 fprintf('- Optimal EDF length = %.2f\n', E.L)
-fprintf('- Number of channels ON = %d\n', sum(Signal.P ~= 0))
+NChOn = sum(Signal.P ~= 0);
+fprintf('- Number of channels ON = %d\n', NChOn)
 
 % 
 offChs = (Signal.P == 0);
@@ -133,19 +148,19 @@ Signal.P(offChs) = eps; % set to small power to calculate gain
 % Compute capacity using numerical and semi-analytical (approx) methods 
 if isfield(problem, 'nonlinearity') && problem.nonlinearity
     [num, approx] = capacity_nonlinear_regime(E, Pump, Signal, problem);
-%     [~, SElamb_relaxed] = capacity_nonlinear_regime_relaxed([E.L Signal.P], E, Pump, Signal, problem);
+    [~, ~, SElamb_relaxed] = capacity_nonlinear_regime_relaxed([E.L Signal.P], E, Pump, Signal, problem);
 else
     [num, approx] = capacity_linear_regime(E, Pump, Signal, problem);
-%     [~, SElamb_relaxed] = capacity_linear_regime_relaxed([E.L Signal.P], E, Pump, Signal, problem);
+    [~, SElamb_relaxed] = capacity_linear_regime_relaxed([E.L Signal.P], E, Pump, Signal, problem);
 end
 
 Signal.P(offChs) = 0;
 
 % 
 fprintf('- Numerical: Total Capacity = %.3f (bits/s/Hz) | Avg. Capacity = %.3f (bits/s/Hz)\n',...
-    sum(num.SE), sum(num.SE)/sum(num.SE ~= 0))
+    sum(num.SE), sum(num.SE)/NChOn)
 fprintf('- Approximated: Total Capacity = %.3f (bits/s/Hz) | Avg. Capacity = %.3f (bits/s/Hz)\n',...
-    sum(approx.SE), sum(approx.SE)/sum(approx.SE ~= 0))
+    sum(approx.SE), sum(approx.SE)/NChOn)
 
 SignalOut = Signal;
 SignalOut.P = dBm2Watt(Signal.PdBm + num.GaindB);
@@ -194,12 +209,14 @@ if exist('verbose', 'var') && verbose
     axis([lnm(1) lnm(end) 0 25])
     
     figure(206), hold on, box on
-    hplot = plot(lnm, approx.SE, 'DisplayName', sprintf('Approx (%d ON)', sum(approx.SE ~= 0)));
-%     plot(lnm, SElamb_relaxed, ':', 'Color', get(hplot, 'Color'), 'DisplayName', sprintf('Relaxed (%d ON)', sum(SElamb_relaxed ~= 0)))
-    plot(lnm, num.SE, '--', 'Color', get(hplot, 'Color'), 'DisplayName', sprintf('Numerical (%d ON)', sum(num.SE ~= 0)))
+    hplot = plot(lnm, approx.SE, 'DisplayName', 'Approximated');
+    plot(lnm, SElamb_relaxed, ':', 'Color', get(hplot, 'Color'), 'DisplayName', 'Relaxed')
+    plot(lnm, num.SE, '--', 'Color', get(hplot, 'Color'), 'DisplayName', 'Numerical')
     xlabel('Wavelength (nm)')
     ylabel('Capacity (bits/s/Hz)')
-    legend('-DynamicLegend', 'Location', 'SouthEast')
+    if isempty(legend(gca))
+        legend('-DynamicLegend', 'Location', 'SouthEast')
+    end
     title(sprintf('EDF %s, L = %.2f m', E.type, E.L), 'Interpreter', 'none')
        
     figure(207), 
