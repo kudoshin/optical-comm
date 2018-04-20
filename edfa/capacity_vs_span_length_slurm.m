@@ -1,4 +1,4 @@
-function capacity_vs_pump_power_slurm(spanLengthKm, Nspans, spacing, task)
+function capacity_vs_span_length_slurm(spacing, Ptotal, task)
 %% Optimize channel power and EDF length to maximize capacity for a given pump power
 % task is an integer (passed as string) that indexes the array taskList
 
@@ -8,24 +8,26 @@ addpath ../f/
 
 verbose = false;
 
-% Select task
-taskList = [30:5:150 200:100:500]; % Variable to be modified in different system calls
-pumpPowermW = taskList(round(str2double(task)));
-pumpPower = 1e-3*pumpPowermW;
-
-% Other input parameters
-spanLengthKm = round(str2double(spanLengthKm));
-Nspans = round(str2double(Nspans));
+% Input parameters
+% Total power
+% Ptotal = 287*50; % total pump power per spatial dimension for the reference system with L = 14350km
+Ptotal = str2double(Ptotal);
 spacing = round(str2double(spacing));
+Lkm = 14350; % total link length in km
+
+% Select task
+% span length approx (30:5:100)    
+taskList = [478   410   359   319   287   261   239   221   205   191   179   169   159   151   144]; % Variable to be modified in different system calls
+Nspans = taskList(round(str2double(task)));
+spanLengthKm = Lkm/Nspans;
+pumpPower = 1e-3*Ptotal/Nspans;
 
 % EDF fiber
 E = EDF(10, 'corning_type1');
 
-% Pump & Signal
-nonlinear_coeff_file = sprintf('../f/GN_model_coeff_spanLengthkm=%dkm_Df=%dGHz.mat', spanLengthKm, spacing);
-NCOEFF = load(nonlinear_coeff_file);
-lamb = NCOEFF.lamb;
-    
+Df = spacing*1e9;
+dlamb = df2dlamb(Df);
+lamb = 1522e-9:dlamb:1582e-9;
 Signal = Channels(lamb, 0, 'forward');
 Pump = Channels(980e-9, pumpPower, 'forward');
 
@@ -35,9 +37,23 @@ SMF.gamma = 0.8e-3;
 [~, spanAttdB] = SMF.link_attenuation(1550e-9); % same attenuation for all wavelengths
 spanAttdB = spanAttdB + 1.5; % adds 1.5 dB of margin
 
+% Nonlinear coefficients
+% check if precomputed
+nonlinear_coeff_file = sprintf('../f/GN_model_coeff_spanLengthkm=%dkm_Df=%dGHz.mat', round(spanLengthKm), spacing);
+if exist(nonlinear_coeff_file, 'file')
+    NCOEFF = load(nonlinear_coeff_file);
+    nonlinear_coeff = NCOEFF.nonlinear_coeff;
+else
+    nonlinear_coeff{1} = GN_model_coeff(lamb, Df, SMF, -1);
+    nonlinear_coeff{2} = GN_model_coeff(lamb, Df, SMF, 0);
+    nonlinear_coeff{3} = GN_model_coeff(lamb, Df, SMF, 1);
+    
+    save(nonlinear_coeff_file, 'SMF', 'lamb', 'nonlinear_coeff', 'Df', 'spanLengthKm');   
+end
+
 % Filename
-filename = sprintf('results/capacity_vs_pump_power_EDF=%s_pump=%dmW_%dnm_ChDf=%dGHz_L=%d_x_%dkm.mat',...
-        E.type, pumpPowermW, round(Pump.wavelength*1e9), spacing, Nspans, spanLengthKm);
+filename = sprintf('results/capacity_vs_span_length_EDF=%s_Ptotal=%dmW_ChDf=%dGHz_L=%dkm_Nspans=%d.mat',...
+        E.type, Ptotal, spacing, Lkm, Nspans);
 filename = check_filename(filename); % verify if already exists and rename it if it does
 disp(filename) 
 
@@ -49,18 +65,20 @@ problem.Namp = Nspans;
 problem.step_approx = @(x) 0.5*(tanh(2*x) + 1); % Smoothing factor = 2
 problem.diff_step_approx = @(x) sech(2*x).^2; % first derivative (used for computing gradient)
 problem.excess_noise_correction = 1.4; % 1.2 for 980nm, 1.6 for 1480nm
-problem.SwarmSize = min(300, 20*(Signal.N+1));
+problem.SwarmSize = min(200, 20*(Signal.N+1));
 problem.nonlinearity = true;
-problem.nonlinear_coeff = NCOEFF.nonlinear_coeff;
-problem.epsilon = 0.06; % From Fig. 17 of P. Poggiolini and I. Paper, “The GN Model
+problem.nonlinear_coeff = nonlinear_coeff;
+% problem.epsilon = 0.06; % From Fig. 17 of P. Poggiolini and I. Paper, “The GN Model
 % of Non-Linear Propagation in Uncompensated Coherent Optical Systems,” 
 % J. Lightw. Technol., vol. 30, no. 24, pp. 3857–3879, 2012.
 
-% Leff = SMF.effective_length(1550e-9);
-% BW = 110*problem.df; % about 100 channels
-% problem.epsilon = 0.3*log(1 + 6*Leff/(SMF.L*asinh(pi^2/2*abs(SMF.beta2(1550e-9))*Leff*BW^2))); % From Eq. 23 of P. Poggiolini and I. Paper, “The GN Model
+Leff = SMF.effective_length(1550e-9);
+BW = 110*problem.df; % about 110 channels ON
+problem.epsilon = 0.3*log(1 + 6*Leff/(SMF.L*asinh(pi^2/2*abs(SMF.beta2(1550e-9))*Leff*BW^2))); % From Eq. 23 of P. Poggiolini and I. Paper, “The GN Model
 % % of Non-Linear Propagation in Uncompensated Coherent Optical Systems,” 
 % % J. Lightw. Technol., vol. 30, no. 24, pp. 3857–3879, 2012.
+
+fprintf('- epsilon = %.3f\n', problem.epsilon)
 
 if spacing == 50
     options.AdaptationConstant = 0.1; 

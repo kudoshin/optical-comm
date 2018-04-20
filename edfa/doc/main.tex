@@ -19,7 +19,6 @@
 \usetikzlibrary{shapes.geometric}
 \usetikzlibrary{pgfplots.groupplots}
 \usetikzlibrary{plotmarks}
-\usetikzlibrary{calc}
 
 
 \usepgfplotslibrary{groupplots}
@@ -310,7 +309,7 @@ C &= \sum_{k = 1}^{K} 2\Delta f\log_2\Bigg(1 + \frac{P_kG(\lambda_k)}{2Nn_{sp}(\
 The summation is performed over the channels that have gain higher than the span attenuation:
 
 \begin{equation}
-SE =\sum_{k} \mathds{1}\{G(\lambda_k) \geq e^{\alpha_{\text{SMF}}(\lambda_k)l}\}\log_2\bigg(1 + \frac{P_k}{2aNn_{sp}(\lambda_k)h\nu_k\Delta f}\bigg) 
+\mathrm{SE} =2\sum_{k} \mathds{1}\{G(\lambda_k) \geq e^{\alpha_{\text{SMF}}(\lambda_k)l}\}\log_2\bigg(1 + \frac{P_k}{2aNn_{sp}(\lambda_k)h\nu_k\Delta f}\bigg) 
 \end{equation}
 
 For simulations, the indicator is approximated by a differentiable function
@@ -363,7 +362,7 @@ D(n_1, n_2, n) &= \gamma^2\frac{16}{27}\frac{1}{\Delta f^3}\int_{-\Delta f/2}^{\
 &\cdot g(x+y-z+l\Delta f)\partial x\partial y\partial z,
 \end{align}
 
-To avoid the nonlinearity in the integrand introduced by $g(x+y-z+l\Delta f)$, we could modify the integration boundaries, but numerical methods don't seem to have a problem integrating with the nonlinearity in the integrad.
+To avoid the nonlinearity in the integrand introduced by $g(x+y-z+l\Delta f)$, we could modify the integration boundaries, but numerical methods don't seem to have a problem integrating with the nonlinearity in the integrand.
 
 The oscillatory behavior of $\chi(f_1, f_2, f)$ makes the integration above difficult. To circumvent this problem, we can use the $\epsilon$ power law for scaling the non-linear noise power $NL_n$ for 1 span to $N_s$ spans \cite{Poggiolini2012}:
 
@@ -386,7 +385,7 @@ For the local optimization, it is necessary to compute the gradient analytically
 Including nonlinearity, the objective function is given by
 
 \begin{equation} \label{eq:grad:SE}
-	\mathrm{SE} = 2\sum_{k = 1}^N s(G_k - A)\log_2(1 +  SNR_k),
+	\mathrm{SE} = 2\sum_{k = 1}^N s(G_k - A)\log_2(1 +  \mathrm{SNR}_k),
 \end{equation}
 where $s(x) = 0.5(\mathrm{tanh(Dx)}-1)$ is a function that approximates a step function and $D$ determines the sharpness of the step function approximation, $G_k$ is the gain of the $k$-th channel in dB, $A_k$ is the span attenuation in the $k$-th channel in dB, and $SNR_k$ is the SNR at the $k$-th channel, which is given by
 \begin{equation}
