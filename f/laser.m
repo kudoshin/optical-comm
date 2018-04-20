@@ -51,7 +51,7 @@ classdef laser
             % Inputs
             % - P: Laser power (W)
             % - Df: One-sided bandwidth (Hz)
-            sigma2 = [];
+            sigma2 = 0;
             if ~isempty(self.RIN)
                 sigma2 = 10^(self.RIN/10)*P.^2*Df; 
             end
@@ -61,7 +61,7 @@ classdef laser
             %% Variance of phase noise
             % Inputs:
             % - fs: sampling frequency
-            sigma2 = [];
+            sigma2 = 0;
             if ~isempty(self.linewidth)
                 sigma2 = 2*pi*self.linewidth/fs; 
             end

@@ -99,7 +99,7 @@ if isfield(sim, 'quantiz') && sim.quantiz && ~isinf(ADC.ENOB)
     codebook = xmin:dx:xmax;
     partition = codebook(1:end-1) + dx/2;
     [~, ys, varQ] = quantiz(xs, partition, codebook); 
-    fprintf('ADC: quantization noise variance = %G | Signal-to-quantization noise ratio = %.2f dB\n', varQ, 10*log10(var(xs)/varQ));
+%     fprintf('ADC: quantization noise variance = %G | Signal-to-quantization noise ratio = %.2f dB\n', varQ, 10*log10(var(xs)/varQ));
 else
     ys = xs;
     varQ = 0;

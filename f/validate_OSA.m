@@ -36,7 +36,7 @@ Vout(2, :)= real(ifft(fft(real(Vin(2, :))).*Htx)) + 1j*real(ifft(fft(imag(Vin(2,
 Laser = laser(1550e-9, PdBm, -150, 200);
 
 Ein = Laser.cw(sim); % Generates electric field with intensity and phase noise       
-Ein = mzm(Ein, Vout, Mod); % modulate optical signal using eletro-optical modulator (EOM)
+Ein = mzm(Ein, Vout, Mod.H); % modulate optical signal using eletro-optical modulator (EOM)
 
 % Ensure that transmitted power is a desired level
 % Ein(2, :) = 0;

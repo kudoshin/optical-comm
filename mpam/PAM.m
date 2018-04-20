@@ -417,7 +417,11 @@ classdef PAM
             
             % Error probability
             Pe = log2(self.M)*BERtarget*(self.M/(2*(self.M-1)));
-
+            [Qreq, ~, exitflag] = fzero(@(Q) qfunc(Q) - Pe, 0);
+            if exitflag ~= 1
+                warning('level_spacing_optm: threshold optimization did not converge');
+            end
+            
             % Initialize levels and thresholds
             aopt = zeros(self.M, 1);
             bopt = zeros(self.M-1, 1);
@@ -433,12 +437,8 @@ classdef PAM
                 for level = 1:self.M-1
                     % Find threshold
                     sig = noise_std(aopt(level));
-
-                    [dPthresh, ~, exitflag] = fzero(@(dPthresh) qfunc(abs(dPthresh)/sig) - Pe, 0);
-
-                    if exitflag ~= 1
-                        warning('level_spacing_optm: threshold optimization did not converge');
-                    end
+                    dPthresh = Qreq*sig;
+%                     [dPthresh, ~, exitflag] = fzero(@(dPthresh) qfunc(abs(dPthresh)/sig) - Pe, 0);
 
                     bopt(level) = aopt(level) + abs(dPthresh);
 

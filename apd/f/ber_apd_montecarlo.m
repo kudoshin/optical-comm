@@ -19,7 +19,12 @@ xk = mpam.signal(dataTX);
 xt = dac(xk, Tx.DAC, sim, sim.shouldPlot('DAC output')); 
 
 %% Generate optical signal
-[Etx, Pt] = eam(Tx.Laser.cw(sim), xt, Tx.Mod, sim.f);
+if isa(Tx.Mod.H,'function_handle')
+    [Etx, Pt] = eam(Tx.Laser.cw(sim), xt, Tx.Mod, sim.f);
+else
+    Tx.Mod.H = Tx.Mod.filt.H;
+    [Etx, Pt] = eam(Tx.Laser.cw(sim), xt, Tx.Mod, sim.f/sim.fs);
+end
 
 %% Ensures that transmitted power is at the right level
 AGC = AGC/(Tx.Ptx/mean(Pt));

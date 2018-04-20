@@ -1,4 +1,4 @@
-function Eout = mzm(Ein, Vin, Mod)
+function Eout = mzm(Ein, Vin, Hmod)
 %% Mach-Zehnder modulator
 % - Sual-pol I/Q modulator if Vin is 2 x N and complex
 % - Single-pol I/Q modulator if Vin is 1 x N and complex
@@ -10,7 +10,7 @@ function Eout = mzm(Ein, Vin, Mod)
 % - tx : contains modulators parameters
 %   - Mod.Hel : electric frequency response
 % Output : Eout is the modulated electric field
-Hmod = ifftshift(Mod.H);    
+Hmod = ifftshift(Hmod);    
 
 if size(Vin, 1) == 2 && not(isreal(Vin)) 
 %% Dual-pol I/Q

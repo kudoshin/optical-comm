@@ -87,7 +87,7 @@ switch type
         end
         Mct = 1/fcnorm;
         
-        cumenergy = cumsum(abs(pshape(0,nmax-1)).^2)/sum(abs(pshape(0,nmax-1)).^2);
+        cumenergy = cumsum(abs(pshape(0:nmax-1)).^2)/sum(abs(pshape(0:nmax-1)).^2);
         nlength = find(cumenergy >= 0.9999, 1, 'first');
         
         num = conj(pshape(nlength-1:-1:0));

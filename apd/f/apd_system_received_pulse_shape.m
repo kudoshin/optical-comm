@@ -8,7 +8,7 @@ Hdac = Tx.DAC.filt.H(f).*freqz(1/Nhold*ones(1, Nhold), 1, 2*pi*f).*exp(1j*2*pi*f
 if isa(Tx.Mod.H,'function_handle')
     Hmod = Tx.Mod.H(sim.f);
 else
-    Hmod = Tx.Mod.H;
+    Hmod = Tx.Mod.filt.H(sim.f/sim.fs);
 end
 Hfiber = Fiber.Himdd(sim.f, Tx.Laser.wavelength, Tx.Mod.alpha, 'small signal');
 Hapd = Apd.H(sim.f);

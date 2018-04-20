@@ -228,7 +228,7 @@ switch lower(eq.type)
 
         % Aux
         eq.h = W;
-        eq.Hff = @(f) freqz(eq.h, 1, 2*pi*f).*exp(1j*2*pi*f*grpdelay(eq.h, 1, 1)); % removed group delay
+        eq.Hff = @(f) freqz(W, 1, 2*pi*f).*exp(1j*2*pi*f*grpdelay(W, 1, 1)); % removed group delay
         eq.Hrx = Hmatched.'; 
         
         if exist('verbose', 'var') && verbose       

@@ -9,8 +9,6 @@ function [ber_count, ber_gauss, OSNRdB, Rx] = ber_pam_montecarlo(mpam, Tx, Fiber
 % - sim: struct with simulation parameters
 
 mpamRef = mpam;
-mpam = mpam.unbias;
-
 dataTX = randi([0 mpam.M-1], 1, sim.Nsymb); % Random sequence 
 dataTX([1 end]) = 0; % set first and last to zero to ensure periodicity
 
@@ -53,12 +51,15 @@ xt = Tx.Vgain*(xt - mean(xt)) + Tx.VbiasAdj*mean(xt);
 %% ============================= Modulator ================================
 Tx.Laser.PdBm = Watt2dBm(Tx.Ptx);
 Tx.Laser.H = @(f) Tx.Mod.filt.H(f/sim.fs);
+Ecw = Tx.Laser.cw(sim);
 if strcmp(Tx.Mod.type, 'MZM')
-    Ecw = Tx.Laser.cw(sim);
-    Etx = mzm(Ecw, xt, Tx.Mod); % transmitted electric field
+    Etx = mzm(Ecw, xt, Tx.Mod.H); % transmitted electric field
 elseif strcmp(Tx.Mod.type, 'DML')
     xt = xt - min(xt);
     Etx = Tx.Laser.modulate(xt, sim);
+elseif strcmp(Tx.Mod.type, 'EAM')
+    Tx.Mod.H =Tx.Laser.H;
+    [Etx, ~] = eam(Ecw, xt, Tx.Mod, sim.f);
 else
     error('ber_pam_montecarlo: Invalid modulator type. Expecting Tx.Mod.type to be either MZM or DML')
 end
@@ -73,16 +74,16 @@ fprintf('> Launched power: %.2f dBm\n', power_meter(Etx));
 
 % Calculate extinction ratio and intensity levels position
 P = abs(Etx).^2;
-Psamp = P(1:sim.Mct:end);
+Psamp = P(1:sim.Mct:end); % sample continuous time signal
 Pl = zeros(1, mpam.M);
 for k = 1:mpam.M
-    Pl(k) = mean(Psamp(dataTX == k-1));
+    Pl(k) = mean(Psamp(dataTX == k-1)); % find average value for each level
 end
-Pl = sort(Pl, 'ascend');
-rexdB = 10*log10(min(Pl)/max(Pl));
+Pl = sort(Pl, 'ascend'); % sort mpam levels
+rexdB = 10*log10(min(Pl)/max(Pl)); % extinction ratio
 fprintf('Estimated extinction ratio = %.2f dB\n', rexdB)
-Pl = Pl - Pl(1);
-Pl = (mpam.M-1)*Pl/Pl(end);
+Pl = Pl - Pl(1); % subtract min value offset
+Pl = (mpam.M-1)*Pl/Pl(end); % scale to 0 - (M-1)
 fprintf('Normalized optical levels: %s\n', sprintf('%.3f\t', Pl));
 
 %% ========================= Fiber propagation ============================
@@ -101,13 +102,13 @@ if isfield(sim, 'preAmp') && sim.preAmp % only included if sim.preAmp is true
     disp('- IMPORTANT: Simulation includes optical amplifier!')
     [Erx, OSNRdBtheory] = Rx.OptAmp.amp(Erx, sim.fs);
   
-    % Measure OSNR
-    Osa = OSA(0.3); % optical spectrum analyser with course enough resolution to measure most of signal power
-    [~, OSNRdBmeasured] = Osa.estimate_osnr(Erx, Tx.Laser.wavelength, sim.f, sim.shouldPlot('OSNR'));
-    % Note: second parameter of Osa.estimate_osnr is OSNR in 0.1 nm
-    % resolution
-    
-    fprintf('OSNR = %.2f dB (theory)\nOSNR = %.2f dB (measured)\n', OSNRdBtheory, OSNRdBmeasured)
+%     % Measure OSNR
+%     Osa = OSA(0.1); % optical spectrum analyser with course enough resolution to measure most of signal power
+%     [~, OSNRdBmeasured] = Osa.estimate_osnr(Erx, Tx.Laser.wavelength, sim.f, sim.shouldPlot('OSNR'));
+%     % Note: second parameter of Osa.estimate_osnr is OSNR in 0.1 nm
+%     % resolution
+%     
+%     fprintf('OSNR = %.2f dB (theory)\nOSNR = %.2f dB (measured)\n', OSNRdBtheory, OSNRdBmeasured)
     OSNRdB = OSNRdBtheory;
 end
 
@@ -124,15 +125,16 @@ fprintf('> Received power: %.2f dBm\n', PrxdBm);
 
 % Whitening filter
 if sim.WhiteningFilter
-    [~, yt] = Rx.PD.Hwhitening(sim.f, mean(abs(Erx).^2), Rx.N0, yt);
+    [~, yt] = Rx.PD.Hwhitening(sim.f, mean(sum(abs(Erx).^2),2), Rx.N0, yt);
 end
 
 % Gain control
-yt = yt - mean(yt);
-yt = yt*sqrt(mean(abs(mpam.a).^2)/(sqrt(2)*mean(abs(yt).^2)));
+mpam = mpam.unbias;
+yt = yt - mean(yt); % zero mean
+yt = yt*sqrt(mean(abs(mpam.a).^2)/(sqrt(2)*mean(abs(yt).^2))); % scale to same mean power as mpam levels
 
 % system frequency responses
-HrxPshape = apd_system_received_pulse_shape(mpam, Tx, Fibers(1), Rx.PD, Rx, sim);
+[HrxPshape, H] = apd_system_received_pulse_shape(mpam, Tx, Fibers(1), Rx.PD, Rx, sim);
 %% ADC
 % ADC performs filtering, quantization, and downsampling
 % For an ideal ADC, ADC.ENOB = Inf
@@ -161,8 +163,11 @@ yd(ndiscard) = [];
 dataTX(ndiscard) = [];
 
 %% =========================== Detection ==============================
-dataRX = mpam.demod(yd);
-% [dataRX, mpam] = mpam.demod_sweeping_thresholds(yd, dataTX);
+if mpam.optimize_level_spacing
+    dataRX = mpam.demod(yd);
+else
+    [dataRX, mpam] = mpam.demod_sweeping_thresholds(yd, dataTX);
+end
 % Note: when performing demodulaton sweepingn thresholds, the decision
 % thresholds will be picked to minimize BER
 
@@ -196,11 +201,13 @@ if isfield(sim, 'preAmp') && sim.preAmp % amplified system: signal-spontaneous b
     % simulation. The BER estimation function will assume the same amplifier gain.
 
 else % unamplified system: thermal-noise dominant for PIN, shot-noise dominant for APD
-    noiseSTD = Rx.PD.stdNoise(Hrx, Rx.eq.Hff(sim.f/(Rx.eq.ros*mpam.Rs)), Rx.N0, Tx.Laser.RIN, sim);
+    noiseSTD = Rx.PD.stdNoise(H.w.*Hrx, Rx.eq.Hff(sim.f/(Rx.eq.ros*mpam.Rs)), Rx.N0, Tx.Laser.RIN, sim);
+    
 end
 
 % AWGN approximation
 mpamRef = mpamRef.adjust_levels(Prx*Rx.PD.Geff, rexdB); % may replace -Inf for rexdB
+
 ber_gauss = mpamRef.berAWGN(noiseSTD);
 
 %% Plots

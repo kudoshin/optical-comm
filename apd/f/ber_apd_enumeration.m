@@ -13,23 +13,57 @@ if ~strcmpi(Rx.eq.type, 'none') % if equalization is necessary
 end
 
 % Frequency and time
+
 [sim.f, sim.t] = freq_time(N, sim.fs);
 
 % system frequency responses
 [HrxPshape, H] = apd_system_received_pulse_shape(mpam, Tx, Fiber, Apd, Rx, sim);
 
-% Ajust levels to desired transmitted power and extinction ratio
-mpam = mpam.adjust_levels(Tx.Ptx, Tx.Mod.rexdB);
-AGC = 1/(mpam.a(end)*Apd.Gain*Apd.R*Fiber.link_attenuation(Tx.Laser.wavelength));
 
 %% Modulated PAM signal
 dataTX = debruijn_sequence(mpam.M, sim.L).'; % de Bruijin sequence
 dataTXext = wextend('1D', 'ppd', dataTX, sim.Ndiscard); % periodic extension
 dataTXext([1:2*sim.L end-2*sim.L:end]) = 0; % set 2L first and last symbols to zero
-xk = mpam.signal(dataTXext);
+
+if ~isfield(Tx.Mod,'type')
+    Tx.Mod.type = 'EAM';
+end
+% predistortion assumes equal level spacing
+if isfield(sim, 'mzm_predistortion') && strcmpi(sim.mzm_predistortion, 'levels') %% Ordinary PAM with predistorted levels
+    assert(strcmp(Tx.Mod.type,'MZM'),'predistortion is set but modulator is not MZM')
+    mpamPredist = mpam.mzm_predistortion(Tx.Mod.Vswing, Tx.Mod.Vbias, sim.shouldPlot('PAM levels MZM predistortion'));
+    xk = mpamPredist.signal(dataTXext); % Modulated PAM signal
+    AGC = 1/(Apd.Geff*Fiber.link_attenuation(Tx.Laser.wavelength));
+else
+    % Ajust levels to desired transmitted power and extinction ratio
+    mpam = mpam.adjust_levels(Tx.Ptx, Tx.Mod.rexdB);
+    AGC = 1/(mpam.a(end)*Apd.Geff*Fiber.link_attenuation(Tx.Laser.wavelength));
+    
+    xk = mpam.signal(dataTXext); % Modulated PAM signal
+end  
+
+%% ============================ Preemphasis ===============================
+if isfield(sim, 'preemphasis') && sim.preemphasis
+    femph = abs(freq_time(sim.Nsymb*sim.ros.txDSP, mpam.Rs*sim.ros.txDSP));
+    femph(femph >= sim.preemphRange) = 0;
+    preemphasis_filter = 10.^(polyval([-0.0013 0.5846 0], femph/1e9)/20);  % Coefficients were measured in the lab  
+
+    xk = real(ifft(fft(xk).*ifftshift(preemphasis_filter)));
+end
+
+%% Predistortion to compensate for MZM non-linear response
+% This predistorts the analog waveform. If sim.mzm_predistortion ==
+% 'levels', then only the levels are predistorted, which is more realistic
+if isfield(sim, 'mzm_predistortion') && strcmpi(sim.mzm_predistortion, 'analog')    
+    xk = 2/pi*asin(sqrt(abs(xk))).*sign(xk); % apply predistortion
+end
 
 %% DAC
 xt = dac(xk, Tx.DAC, sim); 
+
+%% Driver
+% Adjust gain to compensate for preemphasis
+xt = Tx.Vgain*(xt - mean(xt)) + Tx.VbiasAdj*mean(xt);
 
 %% Generate optical signal
 if ~isfield(sim, 'RIN')
@@ -43,11 +77,22 @@ Ecw = Tx.Laser.cw(sim);
 sim.RIN = RIN;
 
 % Modulate
-[Etx, Pt] = eam(Ecw, xt, Tx.Mod, sim.f);
+if strcmp(Tx.Mod.type, 'MZM')
+    Etx = mzm(Ecw, xt, Tx.Mod.filt.H(sim.f/sim.fs)); % transmitted electric field
+elseif strcmp(Tx.Mod.type, 'DML')
+    xt = xt - min(xt);
+    Etx = Tx.Laser.modulate(xt, sim);
+else
+    if ~isa(Tx.Mod.H,'function_handle')
+        Tx.Mod.H =@(f) Tx.Mod.filt.H(f/sim.fs);
+    end
+    [Etx, ~] = eam(Ecw, xt, Tx.Mod, sim.f);
+end
 
 % Ensures that transmitted power is at the right level
-AGC = AGC/(Tx.Ptx/mean(Pt));
-Etx = Etx*sqrt(Tx.Ptx/mean(Pt));
+Padj = Tx.Ptx/mean(abs(Etx).^2);
+AGC = AGC/Padj;
+Etx = Etx*sqrt(Padj);
 
 %% Fiber propagation
 Erx = Fiber.linear_propagation(Etx, sim.f, Tx.Laser.wavelength);
