@@ -50,7 +50,7 @@ elseif size(Vin, 1) == 1 && not(isreal(Vin))
 elseif size(Vin, 1) == 1 && isreal(Vin) 
 %% Single-pol intensity modulator
     % Breaks data into in-phase, quadrature in two pols
-    Vx = Vin(1, :);
+    Vx = Vin;
 
     % Filter driving signal
     Vx = real(ifft(fft(Vx).*Hmod));
@@ -59,7 +59,7 @@ elseif size(Vin, 1) == 1 && isreal(Vin)
     Enorm = 1; % normalize so that E(|Vout|^2) = 1, if Vx in [-1, 1]
     Vout   = Enorm*sin(pi*Vx/2);    
 
-    Eout =  Ein.*Vout(1, :);  % polarization multiplexed signal
+    Eout =  Ein.*Vout;  % polarization multiplexed signal
 else
     error('mzm: Invalid driving signal. Vin must be either 1 x N (real or complex) or 2 x N (complex)')
 end

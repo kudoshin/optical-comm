@@ -11,32 +11,32 @@ addpath ../apd/f
 
 %% Transmit power swipe
 % Tx.PtxdBm = -26:-25;
-Tx.PtxdBm = -15:0; % transmitter power range
-% Tx.PtxdBm = -20:-15; % transmitter power range
+Tx.PtxdBm = -10; % transmitter power range
+% Tx.PtxdBm = -25:-15; % transmitter power range
 
 %% Simulation parameters
-sim.Rb = 25e9;    % bit rate in bits/sec
-sim.Nsymb = 2^17; % Number of symbols in montecarlo simulation
+sim.Rb = 50e9;    % bit rate in bits/sec
+sim.Nsymb = 2^16; % Number of symbols in montecarlo simulation
 sim.ros.txDSP = 1; % oversampling ratio transmitter DSP (must be integer). DAC samping rate is sim.ros.txDSP*mpam.Rs
 % For DACless simulation must make Tx.dsp.ros = sim.Mct and DAC.resolution = Inf
 sim.ros.rxDSP = 1; % oversampling ratio of receiver DSP. If equalization type is fixed time-domain equalizer, then ros = 1
 sim.Mct = 2*5;      % Oversampling ratio to simulate continuous time. Must be integer multiple of sim.ros.txDSP and numerator of sim.ros.rxDSP
-sim.BERtarget = 1.8e-4; 
+% sim.BERtarget = 1.8e-4;
+sim.BERtarget = 1e-3;
 sim.Ndiscard = 512; % number of symbols to be discarded from the begning and end of the sequence
 sim.N = sim.Mct*sim.Nsymb; % number points in 'continuous-time' simulation
-sim.Modulator = 'EAM'; % 'MZM' or 'DML' or 'EAM'
+sim.Modulator = 'MZM'; % 'MZM' or 'DML' or 'EAM'
 sim.L = 4; % de Bruijin sub-sequence length (ISI symbol length)
 
 sim.save = false;
  
 %% Simulation control
 sim.preAmp = false;        % optical amplifier
-sim.Apd = true;
-sim.WhiteningFilter = true;
+sim.Apd = false;
+sim.WhiteningFilter = false;
 sim.OptimizeGain = false;
-sim.preemphasis = false; % preemphasis to compensate for transmitter bandwidth limitation
-sim.preemphRange = 25e9; % preemphasis range
-sim.mzm_predistortion = 'none'; % predistortion to compensate MZM nonlinearity {'none': no predistortion, 'levels': only PAM levels are predistorted, 'analog': analog waveform is predistorted (DEPRECATED)}
+sim.precomp = false;     % precompensation of dispersion and BW limitations
+sim.mzm_predistortion = 'levels'; % predistortion to compensate MZM nonlinearity {'none': no predistortion, 'levels': only PAM levels are predistorted, 'analog': analog waveform is predistorted (DEPRECATED)}
 sim.RIN = true; % include RIN noise in montecarlo simulation
 sim.phase_noise = true; % whether to simulate laser phase noise
 sim.PMD = false; % whether to simulate PMD
@@ -46,9 +46,9 @@ sim.stopSimWhenBERReaches0 = true; % stop simulation when counted BER reaches 0
 % Control what should be plotted
 sim.Plots = containers.Map();
 sim.Plots('BER') = 1;
-sim.Plots('DAC output') = 0;
-sim.Plots('Optical eye diagram') = 0;
-sim.Plots('Received signal eye diagram') = 0;
+sim.Plots('DAC output') = 1;
+sim.Plots('Optical eye diagram') = 1;
+sim.Plots('Received signal eye diagram') = 1;
 sim.Plots('Signal after equalization') = 1;
 sim.Plots('Equalizer') = 1;
 sim.Plots('Electronic predistortion') = 0;
@@ -58,11 +58,14 @@ sim.Plots('OSNR') = 0;
 sim.Plots('Decision errors') = 0;
 sim.Plots('Received signal optical spectrum') = 0;
 sim.Plots('PAM levels MZM predistortion') = 0;
+sim.Plots('Conditional PDF') = 1;
 sim.shouldPlot = @(x) sim.Plots.isKey(x) && sim.Plots(x);
 
 %% Pulse shape
 Tx.pulse_shape = select_pulse_shape('rect', sim.ros.txDSP);
-% pulse_shape = select_pulse_shape('rrc', sim.ros.txDSP, 0.5, 6);
+Tx.DAC.offset = (sim.ros.txDSP-1)/2;
+% Tx.pulse_shape = select_pulse_shape('rc', sim.ros.txDSP, 0.5, 6);
+% Tx.DAC.offset = Tx.pulse_shape.span*sim.ros.txDSP/2;
 
 %% M-PAM
 % PAM(M, bit rate, leve spacing : {'equally-spaced', 'optimized'}, pulse
@@ -110,16 +113,15 @@ Tx.Mod.alpha = 0;
 % fiber(Length in m, anonymous function for attenuation versus wavelength
 % (default: att(lamb) = 0 i.e., no attenuation), anonymous function for 
 % dispersion versus wavelength (default: SMF28 with lamb0 = 1310nm, S0 = 0.092 s/(nm^2.km))
-fiberlen = 20e3;
+fiberlen = 10e3;
 SMF = fiber(fiberlen); 
-DCF = fiber(0, @(lamb) 0, @(lamb) -0.1*(lamb-1550e-9)*1e3 - 40e-6); 
-DCF.L = SMF.L*SMF.D(wavelength)/DCF.D(wavelength);
+% DCF = fiber(0, @(lamb) 0, @(lamb) -0.1*(lamb-1550e-9)*1e3 - 40e-6); 
+% DCF.L = SMF.L*SMF.D(wavelength)/DCF.D(wavelength);
+% 
+% Fibers = [SMF DCF];
 
-Fibers = [SMF DCF];
-% Fibers = SMF;
-
-linkAttdB = SMF.att(Tx.Laser.wavelength)*SMF.L/1e3...
-    + DCF.att(Tx.Laser.wavelength)*DCF.L/1e3;
+linkAttdB = SMF.att(Tx.Laser.wavelength)*SMF.L/1e3;...
+%     + DCF.att(Tx.Laser.wavelength)*DCF.L/1e3;
 
 %% ========================== Amplifier ===================================
 % Constructor: OpticalAmplifier(Operation, param, Fn, Wavelength)
@@ -140,7 +142,7 @@ if ~sim.Apd
 else
     % APD
     % apd(GaindB, ka, BW, R, Id)
-    Rx.PD = apd(12, 0.15, [25e9 270e9], 0.7, 10e-9);
+    Rx.PD = apd(12, 0.15, [18e9 270e9], 0.7, 10e-9);
 end
 
 %% TIA-AGC
@@ -153,14 +155,14 @@ Rx.filtering = 'matched'; % {'antialiasing' or 'matched'}
 %% ADC for direct detection case
 Rx.ADC.fs = sim.ros.rxDSP*mpam.Rs;
 Rx.ADC.ros = sim.ros.rxDSP;
-Rx.ADC.filt = design_filter('butter', 5, (Rx.ADC.fs/2)/(sim.fs/2)); % Antialiasing filter
+Rx.ADC.filt = design_filter('butter', 5, (Rx.ADC.fs*0.7)/(sim.fs/2)); % Antialiasing filter
 Rx.ADC.ENOB = 5; % effective number of bits. Quantization is only included if quantiz = true and ENOB ~= Inf
 Rx.ADC.rclip = 0;
 
 %% Equalizer
 % Terminology: TD = time domain, SR = symbol-rate, LE = linear equalizer
 Rx.eq.ros = sim.ros.rxDSP;
-Rx.eq.type = 'fixed td-sr-le'; %'fixed td-sr-le' or 'adaptive td-le'
+Rx.eq.type = 'adaptive td-le'; %'fixed td-sr-le' or 'adaptive td-le or 'none'
 Rx.eq.Ntaps = 15; % number of taps
 Rx.eq.mu = 1e-3; % adaptation ratio
 Rx.eq.Ntrain = 1e4; % Number of symbols used in training (if Inf all symbols are used)
@@ -175,11 +177,10 @@ assert(Ndiscarded < sim.Nsymb, 'There arent enough symbols to perform simulation
 fprintf('%d (2^%.2f) symbols will be used to calculated the BER\n', sim.Nsymb - Ndiscarded, log2(sim.Nsymb - Ndiscarded));
 
 %% Calculate BER
-sim.OptimizeGain = true;
-% [ber, ~, Rx.PD] = apd_ber(mpam, Tx, SMF, Rx.PD, Rx, sim);
+[ber, ~, Rx.PD] = apd_ber(mpam, Tx, SMF, Rx.PD, Rx, sim);
 % display(Rx.PD.GaindB)
-mpam.level_spacing = 'optimized';
-[ber_apd_eq, mpam, Rx.PD] = apd_ber(mpam, Tx, SMF, Rx.PD, Rx, sim);
+% mpam.level_spacing = 'optimized';
+% [ber_apd_eq, mpam, Rx.PD] = apd_ber(mpam, Tx, SMF, Rx.PD, Rx, sim);
 % display(Rx.PD.GaindB)
 %% Run simulation 
 % Ptx = dBm2Watt(Tx.PtxdBm(1)); % Transmitted power
@@ -200,30 +201,30 @@ mpam.level_spacing = 'optimized';
 
 
 %% Plots
-if sim.shouldPlot('BER') && length(ber.count) > 1
-    figure(1), hold on, box on
-    if sim.preAmp
-        hline(1) = plot(OSNRdB, log10(ber.count), '-o', 'LineWidth', 2, 'DisplayName', 'Counted');
-        hline(2) = plot(OSNRdB, log10(ber.gauss), '-', 'Color', get(hline(1), 'Color'), 'LineWidth', 2, 'DisplayName', 'Gaussian Approx.');
-        hline(3) = plot(OSNRdB(OSNRdB ~= 0), log10(pam_ber_from_osnr(mpam.M, OSNRdB(OSNRdB ~= 0), Rx.noiseBW)), '--k', 'LineWidth', 2, 'DisplayName', 'Sig-spont & noise enhancement');
-        hline(3) = plot(OSNRdB(OSNRdB ~= 0), log10(pam_ber_from_osnr(mpam.M, OSNRdB(OSNRdB ~= 0), mpam.Rs/2)), ':k', 'LineWidth', 2, 'DisplayName', 'Sig-spont limit');
-        legend('-DynamicLegend')
-        axis([OSNRdB(1) OSNRdB(find(OSNRdB ~= 0, 1, 'last')) -8 0])
-        xlabel('OSNR (dB)', 'FontSize', 12)
-    else
-        PrxdBm = Tx.PtxdBm - linkAttdB;
-%         PrxdBm = gains;
-        hline(1) = plot(PrxdBm, log10(ber.count), '-o', 'LineWidth', 2, 'DisplayName', 'Counted2');
-%         hline(2) = plot(PrxdBm, log10(ber.gauss), '-', 'Color', get(hline(1), 'Color'), 'LineWidth', 2, 'DisplayName', 'Gaussian Approximation');
-%         hline(3) = plot(PrxdBm, log10(ber.count), '-o', 'DisplayName', 'Counted', 'Color', get(hline(1), 'Color'));
-        hline(4) = plot(PrxdBm, log10(ber.awgn), 'DisplayName', 'awgn', 'Color', get(hline(1), 'Color'));
-        hline(5) = plot(PrxdBm, log10(ber.enum), '--', 'DisplayName', 'enum', 'Color', get(hline(1), 'Color'));
-        legend('-DynamicLegend')
-%         axis([PrxdBm(1) PrxdBm(end) -8 0])
-        xlabel('Received power (dBm)', 'FontSize', 12)
-%         xlabel('APD gain (dB)','FontSize',12)
-    end
-end
+% if sim.shouldPlot('BER') && length(ber.count) > 1
+%     figure(1), hold on, box on
+%     if sim.preAmp
+%         hline(1) = plot(OSNRdB, log10(ber.count), '-o', 'LineWidth', 2, 'DisplayName', 'Counted');
+%         hline(2) = plot(OSNRdB, log10(ber.gauss), '-', 'Color', get(hline(1), 'Color'), 'LineWidth', 2, 'DisplayName', 'Gaussian Approx.');
+%         hline(3) = plot(OSNRdB(OSNRdB ~= 0), log10(pam_ber_from_osnr(mpam.M, OSNRdB(OSNRdB ~= 0), Rx.noiseBW)), '--k', 'LineWidth', 2, 'DisplayName', 'Sig-spont & noise enhancement');
+%         hline(3) = plot(OSNRdB(OSNRdB ~= 0), log10(pam_ber_from_osnr(mpam.M, OSNRdB(OSNRdB ~= 0), mpam.Rs/2)), ':k', 'LineWidth', 2, 'DisplayName', 'Sig-spont limit');
+%         legend('-DynamicLegend')
+%         axis([OSNRdB(1) OSNRdB(find(OSNRdB ~= 0, 1, 'last')) -8 0])
+%         xlabel('OSNR (dB)', 'FontSize', 12)
+%     else
+%         PrxdBm = Tx.PtxdBm - linkAttdB;
+% %         PrxdBm = gains;
+%         hline(1) = plot(PrxdBm, log10(ber.count), '-o', 'LineWidth', 2, 'DisplayName', 'Counted2');
+% %         hline(2) = plot(PrxdBm, log10(ber.gauss), '-', 'Color', get(hline(1), 'Color'), 'LineWidth', 2, 'DisplayName', 'Gaussian Approximation');
+% %         hline(3) = plot(PrxdBm, log10(ber.count), '-o', 'DisplayName', 'Counted', 'Color', get(hline(1), 'Color'));
+%         hline(4) = plot(PrxdBm, log10(ber.awgn), '--', 'DisplayName', 'awgn', 'Color', get(hline(1), 'Color'));
+%         hline(5) = plot(PrxdBm, log10(ber.enum), 'DisplayName', 'enum', 'Color', get(hline(1), 'Color'));
+%         legend('-DynamicLegend')
+% %         axis([PrxdBm(1) PrxdBm(end) -8 0])
+%         xlabel('Received power (dBm)', 'FontSize', 12)
+% %         xlabel('APD gain (dB)','FontSize',12)
+%     end
+% end
 ylabel('log_{10}(BER)', 'FontSize', 12)
 set(gca, 'FontSize', 12)
 

@@ -5,7 +5,7 @@ function [Et, Pt] = eam(Ein, Vin, Mod, f)
 % 3. Adds chirp if Mod.alpha is defined
 
 % Apply frequency response of the modulator
-Pt = abs(Ein).^2./mean(abs(Ein).^2).*real(ifft(fft(Vin).*ifftshift(Mod.H(f))));
+Pt = abs(Ein).^2.*real(ifft(fft(Vin).*ifftshift(Mod.H(f))));
 
 % Modulator Nonlinearity
 %## To be implemented

@@ -127,7 +127,7 @@ classdef apd
                 r = N0/self.varShot(P, 1); % Ratio between thermal and shot noise PSD
                 % Note: in calculating shot noise PSD the average power is used
                 Hw = sqrt((1 + r)./(r + abs(self.H(f)).^2));
-                [Hw, groupdelay] = Hgrpdelay(Hw, f);
+                [Hw, ~] = Hgrpdelay(Hw, f);
 
                 if exist('x', 'var')
                     y = ifft(fft(x).*ifftshift(Hw));
@@ -311,27 +311,42 @@ classdef apd
                        
             %% Iterate until convergence
             Pmean = [0 1];
-            tol = 1e-6;
+            tol = 1e-5;
             n = 1;
             maxIterations = 50;
-            Tx.Ptx = 1e-3; % initial power 
+            Tx.Ptx = 1e-5; % initial power 
             Fiber.att = @(l) 0; % disregard attenuation
             Pdiff = Inf;
+            mpam=mpam.reset_levels;
             mpam = mpam.adjust_levels(Tx.Ptx, Tx.Mod.rexdB); % starting level spacing
-            while Pdiff > tol && n < maxIterations  
-                [~, noise_std]  = ber_apd_awgn(mpam, Tx, Fiber, this, Rx, sim);
-                % noise_std assumes that levels and decision thresholds are
-                % referred to the receiver
+%             if isfield(Rx.eq,'type') && ~strcmp(Rx.eq.type,'none')
+%                 while Pdiff > tol && n < maxIterations  
+%                     [~, noise_std]  = ber_apd_awgn(mpam, Tx, Fiber, this, Rx, sim);   
+%                     % noise_std assumes that levels and decision thresholds are
+%                     % referred to the receiver
+% 
+%                      % Optimized levels are with respect to transmitter
+%                     mpam = mpam.optimize_level_spacing_gauss_approx(sim.BERtarget, Tx.Mod.rexdB, noise_std);
+%                     % Levels optimized at the receiver
+%                     
+%                     % Required power at the APD input
+%                     Pmean(n+1) = mean(mpam.a)/this.Geff;
+%                     Tx.Ptx = Pmean(n+1);
+%                     Pdiff = abs((Pmean(n+1) - Pmean(n))/Pmean(n));
+%                     n = n+1;
+%                 end
+%             else
+                while Pdiff > tol && n < maxIterations  
+                    [~,~,distr]  = ber_apd_enumeration(mpam, Tx, Fiber, this, Rx, sim);          
+                    mpam = mpam.optimize_level_spacing_enum(sim.BERtarget, distr);   
 
-                mpam = mpam.optimize_level_spacing_gauss_approx(sim.BERtarget, Tx.Mod.rexdB, noise_std); % Optimized levels are with respect to transmitter
-                % Levels optimized at the receiver
-                
-                % Required power at the APD input
-                Pmean(n+1) = mean(mpam.a)/this.Geff;
-                Tx.Ptx = Pmean(n+1);
-                Pdiff = abs((Pmean(n+1) - Pmean(n))/Pmean(n));
-                n = n+1; 
-            end
+                    % Required power at the APD input
+                    Pmean(n+1) = mean(mpam.a)/this.Geff;
+                    Tx.Ptx = Pmean(n+1);
+                    Pdiff = abs((Pmean(n+1) - Pmean(n))/Pmean(n));
+                    n = n+1;
+%                 end
+                end
             
             Pmean = Pmean(end);
             

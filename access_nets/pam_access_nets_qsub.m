@@ -1,38 +1,43 @@
-function ber = pam_access_nets_qsub(M, fiberLengthKm, wavelengthnm, ModBWGHz, amplified, RecBWGHz, Ntaps, ENOB, ros)
+function [ber, sim, mpam, Tx, Fibers, Rx] = ...
+pam_access_nets_qsub(RsGbd, M, fiberLengthKm, wavelengthnm, ModBWGHz, modulator, ...
+levels, amplified, gain, RecBWGHz, equalization, BERtarget, fc)
 %% Calculate BER of IM-DD system using M-PAM
 % - Equalization is done using a fractionally spaced linear equalizer
 % Simulations include modulator, fiber, optical amplifier (optional) characterized 
 % only by gain and noise figure, optical bandpass filter, antialiasing 
 % filter, sampling, and linear equalization
 
-addpath ../f % general functions
-addpath ../apd % for PIN photodetectors
-addpath ../apd/f
-addpath ../mpam
-
 %% Transmit power swipe
 switch(M)
     case 2
-%         Tx.PtxdBm = -35:-25; % transmitter power range
-%         Tx.PtxdBm = -30:-20;
-        Tx.PtxdBm = -25:-15;
+        Tx.PtxdBm = -35:-25; % transmitter power range
+%         Tx.PtxdBm = -35:-20;
     case 4
-        Tx.PtxdBm = -20:-10;
+        Tx.PtxdBm = -30:-20;
     case 8
 %         Tx.PtxdBm = -15:-5;
-        Tx.PtxdBm = 10;
+        Tx.PtxdBm = -25:-5;
+        
+    case 3
+        Tx.PtxdBm = -30:-20;
 end
+Tx.PtxdBm = reshape(Tx.PtxdBm,[],1);
+% Tx.PtxdBm = -22.5;
 %% Simulation parameters
-sim.Rb = 25e9*log2(M)/2;    % bit rate in bits/sec, constant Rs 12.5G
-sim.Nsymb = 2^16; % Number of symbols in montecarlo simulation
+if M~=3
+    sim.Rb = RsGbd*1e9*log2(M);    % bit rate in bits/sec
+else
+    sim.Rb = RsGdb*1e9*1.5;
+end
+sim.Nsymb = 2^17; % Number of symbols in montecarlo simulation
 sim.ros.txDSP = 1; % oversampling ratio transmitter DSP (must be integer). DAC samping rate is sim.ros.txDSP*mpam.Rs
 % For DACless simulation must make Tx.dsp.ros = sim.Mct and DAC.resolution = Inf
-sim.ros.rxDSP = ros; % oversampling ratio of receiver DSP. If equalization type is fixed time-domain equalizer, then ros = 1
+sim.ros.rxDSP = 1; % oversampling ratio of receiver DSP. If equalization type is fixed time-domain equalizer, then ros = 1
 sim.Mct = 2*5;      % Oversampling ratio to simulate continuous time. Must be integer multiple of sim.ros.txDSP and numerator of sim.ros.rxDSP
-sim.BERtarget = 1.8e-4; 
+sim.BERtarget = BERtarget;
 sim.Ndiscard = 512; % number of symbols to be discarded from the begning and end of the sequence
 sim.N = sim.Mct*sim.Nsymb; % number points in 'continuous-time' simulation
-sim.Modulator = 'EAM'; % 'MZM' or 'DML' or 'EAM'
+sim.Modulator = modulator; % 'MZM' or 'DML' or 'EAM'
 sim.L = 4; % de Bruijin sub-sequence length (ISI symbol length)
 
 sim.save = true;
@@ -44,19 +49,23 @@ sim.WhiteningFilter = true;
 sim.OptimizeGain = false;
 sim.preemphasis = false; % preemphasis to compensate for transmitter bandwidth limitation
 sim.preemphRange = 25e9; % preemphasis range
-sim.mzm_predistortion = 'none'; % predistortion to compensate MZM nonlinearity {'none': no predistortion, 'levels': only PAM levels are predistorted, 'analog': analog waveform is predistorted (DEPRECATED)}
+if strcmp(sim.Modulator,'MZM')
+    sim.mzm_predistortion = 'levels'; % predistortion to compensate MZM nonlinearity {'none': no predistortion, 'levels': only PAM levels are predistorted, 'analog': analog waveform is predistorted (DEPRECATED)}
+else
+    sim.mzm_predistortion = 'none';
+end
 sim.RIN = true; % include RIN noise in montecarlo simulation
 sim.phase_noise = true; % whether to simulate laser phase noise
 sim.PMD = false; % whether to simulate PMD
 sim.quantiz = true; % whether quantization is included
-sim.stopSimWhenBERReaches0 = true; % stop simulation when counted BER reaches 0
+sim.terminateWhenBERReaches0 = true; % stop simulation when counted BER reaches 0
 
 % Control what should be plotted
 sim.Plots = containers.Map();
 sim.Plots('BER') = 1;
 sim.Plots('DAC output') = 0;
-sim.Plots('Optical eye diagram') = 0;
-sim.Plots('Received signal eye diagram') = 0;
+sim.Plots('Optical eye diagram') = 1;
+sim.Plots('Received signal eye diagram') = 1;
 sim.Plots('Signal after equalization') = 1;
 sim.Plots('Equalizer') = 1;
 sim.Plots('Electronic predistortion') = 0;
@@ -66,6 +75,7 @@ sim.Plots('OSNR') = 0;
 sim.Plots('Decision errors') = 0;
 sim.Plots('Received signal optical spectrum') = 0;
 sim.Plots('PAM levels MZM predistortion') = 0;
+sim.Plots('Conditional PDF') = 1;
 sim.shouldPlot = @(x) sim.Plots.isKey(x) && sim.Plots(x);
 
 %% Pulse shape
@@ -75,7 +85,8 @@ Tx.pulse_shape = select_pulse_shape('rect', sim.ros.txDSP);
 %% M-PAM
 % PAM(M, bit rate, leve spacing : {'equally-spaced', 'optimized'}, pulse
 % shape: struct containing properties of pulse shape 
-mpam = PAM(M, sim.Rb, 'equally-spaced', Tx.pulse_shape);
+
+mpam = PAM(M, sim.Rb, levels, Tx.pulse_shape);
 
 %% Time and frequency
 sim.fs = mpam.Rs*sim.Mct;  % sampling frequency in 'continuous-time'
@@ -104,7 +115,8 @@ Tx.Laser = laser(wavelength, 0);
 Tx.Laser.alpha = 0;
 
 %% Modulator
-Tx.Mod.rexdB = -15;  % extinction ratio in dB. Defined as Pmin/Pmax
+% Tx.Mod.rexdB = -10;  % extinction ratio in dB. Defined as Pmin/Pmax
+Tx.Mod.rexdB = -inf;  % extinction ratio in dB. Defined as Pmin/Pmax
 Tx.Mod.type = sim.Modulator; 
 Tx.Vgain = 1; % Gain of driving signal
 Tx.VbiasAdj = 1; % adjusts modulator bias
@@ -121,14 +133,14 @@ Tx.Mod.alpha = 0;
 % dispersion versus wavelength (default: SMF28 with lamb0 = 1310nm, S0 = 0.092 s/(nm^2.km))
 fiberlen = fiberLengthKm*1e3;
 SMF = fiber(fiberlen); 
-DCF = fiber(0, @(lamb) 0, @(lamb) -0.1*(lamb-1550e-9)*1e3 - 40e-6); 
-DCF.L = SMF.L*SMF.D(wavelength)/DCF.D(wavelength);
+% DCF = fiber(0, @(lamb) 0, @(lamb) -0.1*(lamb-1550e-9)*1e3 - 40e-6); 
+% DCF.L = SMF.L*SMF.D(wavelength)/DCF.D(wavelength);
 
-Fibers = [SMF DCF];
-% Fibers = SMF;
+% Fibers = [SMF DCF];
+Fibers = SMF;
 
-linkAttdB = SMF.att(Tx.Laser.wavelength)*SMF.L/1e3...
-    + DCF.att(Tx.Laser.wavelength)*DCF.L/1e3;
+linkAttdB = SMF.att(Tx.Laser.wavelength)*SMF.L/1e3;%...
+%     + DCF.att(Tx.Laser.wavelength)*DCF.L/1e3;
 
 %% ========================== Amplifier ===================================
 % Constructor: OpticalAmplifier(Operation, param, Fn, Wavelength)
@@ -143,12 +155,12 @@ Rx.OptAmp = OpticalAmplifier('ConstantOutputPower', 0, 5, Tx.Laser.wavelength);
 %% ============================ Receiver ==================================
 %% Photodiodes
 
-if amplified == 2
+if sim.Apd
     % APD
     % apd(GaindB, ka, BW, R, Id)
-    Rx.PD = apd(11, 0.5, RecBWGHz*1e9, 1, 10e-9);
+    Rx.PD = apd(gain, 0.15, [RecBWGHz*1e9 300e9] , 0.7, 10e-9);
 else
-    % PIN
+    % PIN3
     % pin(R, Id, BW)
     Rx.PD = pin(1, 10e-9, Inf);
 end
@@ -158,60 +170,85 @@ end
 Rx.N0 = (30e-12).^2; 
 
 %% Receiver DSP
-Rx.filtering = 'matched'; % {'antialiasing' or 'matched'}
+if strcmp(equalization,'none')
+    Rx.filtering = 'antialiasing';
+else
+    Rx.filtering = 'matched'; % {'antialiasing' or 'matched'}
+end
 
 %% ADC for direct detection case
-Rx.ADC.fs = sim.ros.rxDSP*mpam.Rs;
-Rx.ADC.ros = sim.ros.rxDSP;
-Rx.ADC.filt = design_filter('butter', 5, (Rx.ADC.fs/2)/(sim.fs/2)); % Antialiasing filter
-Rx.ADC.ENOB = ENOB; % effective number of bits. Quantization is only included if quantiz = true and ENOB ~= Inf
-Rx.ADC.rclip = 0;
+if strcmp(equalization,'none')
+    assert(sim.ros.rxDSP==1,'no oversampling without equalization')
+    Rx.ADC.fs = mpam.Rs;
+    Rx.ADC.ros = 1;
+    % increase filter cutoff from antialiasing filter
+    Rx.ADC.filt = design_filter('bessel', 5, fc*Rx.ADC.fs/(sim.fs/2));
+    Rx.ADC.ENOB = Inf;
+    Rx.ADC.rclip = 0;
+else
+    Rx.ADC.fs = sim.ros.rxDSP*mpam.Rs;
+    Rx.ADC.ros = sim.ros.rxDSP;
+    Rx.ADC.filt = design_filter('butter', 5, (Rx.ADC.fs/2)/(sim.fs/2)); % Antialiasing filter
+    Rx.ADC.ENOB = 5; % effective number of bits. Quantization is only included if quantiz = true and ENOB ~= Inf
+    Rx.ADC.rclip = 0;
+end
 
 %% Equalizer
 % Terminology: TD = time domain, SR = symbol-rate, LE = linear equalizer
-Rx.eq.ros = sim.ros.rxDSP;
-Rx.eq.type = 'fixed td-sr-le'; %'fixed td-sr-le' or 'adaptive td-le'
-Rx.eq.Ntaps = Ntaps; % number of taps
-Rx.eq.mu = 1e-3; % adaptation ratio
-Rx.eq.Ntrain = 1e4; % Number of symbols used in training (if Inf all symbols are used)
-Rx.eq.Ndiscard = [1.2e4 128]; % symbols to be discard from begining and end of sequence due to adaptation, filter length, etc
+Ndiscarded = 2*sim.Ndiscard;
+if strcmp(equalization,'none')
+    Rx.eq.ros = 1;
+    Rx.eq.type = 'none';
+    Rx.eq.Ndiscard = [0 0];
+else
+    Rx.eq.ros = sim.ros.rxDSP;
+    Rx.eq.type = equalization; %'fixed td-sr-le' or 'adaptive td-le' or 'none'
+    Rx.eq.Ntaps = 15; % number of taps
+    Rx.eq.mu = 1e-3; % adaptation ratio
+    Rx.eq.Ntrain = 2e4; % Number of symbols used in training (if Inf all symbols are used)
+    Rx.eq.Ndiscard = [2.2e4 128]; % symbols to be discard from begining and end of sequence due to adaptation, filter length, etc
+    Ndiscarded = Ndiscarded + sum(Rx.eq.Ndiscard);
+end
+
 
 %% Generate summary
 % generate_summary(mpam, Tx, Fibers, Rx.OptAmp, Rx, sim);
 
 % check if there are enough symbols to perform simulation
-Ndiscarded = sum(Rx.eq.Ndiscard) + 2*sim.Ndiscard;
 assert(Ndiscarded < sim.Nsymb, 'There arent enough symbols to perform simulation. Nsymb must be increased or Ndiscard must be reduced')
 fprintf('%d (2^%.2f) symbols will be used to calculated the BER\n', sim.Nsymb - Ndiscarded, log2(sim.Nsymb - Ndiscarded));
 
 %% Calculate BER
-if amplified > 0
-    sim.OptimizeGain = false;
-end
-[ber, ~, Rx.PD] = apd_ber(mpam, Tx, SMF, Rx.PD, Rx, sim);
+[ber, mpam, Rx.PD] = apd_ber(mpam, Tx, SMF, Rx.PD, Rx, sim);
 % display(Rx.PD.GaindB)
 % mpam.level_spacing = 'optimized';
 % [ber_apd_eq, mpam, Rx.PD] = apd_ber(mpam, Tx, SMF, Rx.PD, Rx, sim);
 % display(Rx.PD.GaindB)
 %% Run simulation
-Ptx = dBm2Watt(Tx.PtxdBm); % Transmitted power
-
-ber.count2 = zeros(size(Ptx));
-ber.gauss = zeros(size(Ptx));
-OSNRdB = zeros(size(Ptx));
-for k = 1:length(Ptx)
-    Tx.Ptx = Ptx(k);
-    % Montecarlo simulation
-    [ber.count2(k), ber.gauss(k), OSNRdB(k), Rx] = ber_pam_montecarlo(mpam, Tx, Fibers, Rx, sim);
-    % only equalizer and noiseBW fields are changed in struct Rx
-    
-    if sim.stopSimWhenBERReaches0 && ber.count2(k) == 0
-        break;
-    end 
-end
+% Ptx = dBm2Watt(Tx.PtxdBm); % Transmitted power
+% 
+% ber.count2 = zeros(size(Ptx));
+% ber.gauss = zeros(size(Ptx));
+% OSNRdB = zeros(size(Ptx));
+% for k = 1:length(Ptx)
+%     Tx.Ptx = Ptx(k);
+%     % Montecarlo simulation
+%     [ber.count2(k), ber.gauss(k), OSNRdB(k), Rx] = ber_pam_montecarlo(mpam, Tx, Fibers, Rx, sim);
+%     % only equalizer and noiseBW fields are changed in struct Rx
+%     
+%     if sim.stopSimWhenBERReaches0 && ber.count2(k) == 0
+%         break;
+%     end 
+% end
 
 
 %% Plots
+if sim.preAmp
+    PrxdBm = OSNRdbB;
+else
+    PrxdBm = Tx.PtxdBm - linkAttdB;
+end
+ber.PrxdBm = PrxdBm;
 % if sim.shouldPlot('BER') && length(ber.count) > 1
 %     figure(1), hold on, box on
 %     if sim.preAmp
@@ -225,8 +262,8 @@ end
 %     else
 %         PrxdBm = Tx.PtxdBm - linkAttdB;
 % %         PrxdBm = gains;
-% %         hline(1) = plot(PrxdBm, log10(ber.count2), '-o', 'LineWidth', 2, 'DisplayName', 'Counted2');
-% %         hline(2) = plot(PrxdBm, log10(ber.gauss), '-', 'Color', get(hline(1), 'Color'), 'LineWidth', 2, 'DisplayName', 'Gaussian Approximation');
+%         hline(1) = plot(PrxdBm, log10(ber.count2), '-o', 'LineWidth', 2, 'DisplayName', 'Counted2');
+%         hline(2) = plot(PrxdBm, log10(ber.gauss), '-', 'Color', get(hline(1), 'Color'), 'LineWidth', 2, 'DisplayName', 'Gaussian Approximation');
 %         hline(3) = plot(PrxdBm, log10(ber.count), '-o', 'DisplayName', 'Counted');
 %         hline(4) = plot(PrxdBm, log10(ber.awgn), '--', 'DisplayName', 'awgn');
 %         hline(5) = plot(PrxdBm, log10(ber.enum), '--', 'DisplayName', 'enum');
@@ -235,29 +272,41 @@ end
 %         xlabel('Received power (dBm)', 'FontSize', 12)
 % %         xlabel('APD gain (dB)','FontSize',12)
 %     end
+%     ylabel('log_{10}(BER)', 'FontSize', 12)
+%     set(gca, 'FontSize', 12)
 % end
-% ylabel('log_{10}(BER)', 'FontSize', 12)
-% set(gca, 'FontSize', 12)
 
 %% save results
 if sim.save
     try
         amp = {'pin','soa','apd'};
-        folder = sprintf('./results/12.5Gbd/%dPAM/BW=%dGHz/amp=%s/',...
-            mpam.M, Rx.PD.BW*1e-9,amp{sim.preAmp+2*sim.Apd+1});
+%         folder = sprintf('./results/%dGbd/%dPAM/BW=%dGHz/amp=%s/',...
+%             RsGbd,mpam.M, Rx.PD.BW*1e-9,amp{sim.preAmp+2*sim.Apd+1});
+        folder = sprintf('./results/%sGbd/%dPAM/',num2str(RsGbd),mpam.M);
         if ~exist(folder,'dir')
             mkdir(folder)
         end
-        filename = sprintf('PAM_BER_L=%dkm.mat', fiberlen*1e-3);
-
+        if strcmp(equalization,'none')
+            filename = sprintf(['PAM_BER_TxBW=%dGHz_RxBW=%dGHz%s_%s_lev=%s_'...
+            'amp=%s_G=%sdB_eq=%s_BER=%.2e_L=%dkm.mat'], ...
+            ModBWGHz, RecBWGHz, num2str(fc), modulator, levels, ...
+            amp{amplified+1},num2str(gain),equalization,BERtarget,fiberLengthKm);
+        else
+            filename = sprintf(['PAM_BER_TxBW=%dGHz_RxBW=%dGHz_%s_lev=%s_'...
+                'amp=%s_G=%sdB_eq=%s_BER=%.2e_L=%dkm.mat'], ...
+                ModBWGHz, RecBWGHz, modulator, levels, ...
+                amp{amplified+1},num2str(gain),equalization,BERtarget,fiberLengthKm);
+        end
+        strrep(filename,' ','-');       % replace spaces
+        
         filename = check_filename([folder filename])
-
+        
         % delete large variables
         sim = rmfield(sim, 'f');
         sim = rmfield(sim, 't');
         Tx.Mod = rmfield(Tx.Mod, 'H');    
 
-        save(filename)
+        save(filename, 'sim','mpam','Tx','Fibers','Rx','ber','PrxdBm');
     catch
         warning('error saving file, saving to temp.mat')
         if isfield(sim, 'f')

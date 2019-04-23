@@ -1,13 +1,13 @@
-function berenum = ber_apd_enumeration(mpam, Tx, Fiber, Apd, Rx, sim)
+function [berenum, pe, distr] = ber_apd_enumeration(mpam, Tx, Fiber, Apd, Rx, sim)
 %% Calculate BER for unamplified IM-DD link with APD using enumeration method
 
 %% Pre calculations
-Nsymb = mpam.M^sim.L; % number of data symbols 
-N = sim.Mct*(Nsymb + 2*sim.Ndiscard); % total number of points 
-
+Nsymb = mpam.const_size^sim.L; % number of data symbols 
+N = sim.Mct*(Nsymb*mpam.symdim + 2*sim.Ndiscard); % total number of points 
+    
 % change receiver filtering and equalization type
-Rx.filtering = 'matched';
 if ~strcmpi(Rx.eq.type, 'none') % if equalization is necessary
+    Rx.filtering = 'matched';
     Rx.eq.type = 'Fixed TD-SR-LE'; % always use fixed time-domain symbol rate LE for analysis
     Rx.eq.ros = 1;
 end
@@ -21,24 +21,27 @@ end
 
 
 %% Modulated PAM signal
-dataTX = debruijn_sequence(mpam.M, sim.L).'; % de Bruijin sequence
-dataTXext = wextend('1D', 'ppd', dataTX, sim.Ndiscard); % periodic extension
-dataTXext([1:2*sim.L end-2*sim.L:end]) = 0; % set 2L first and last symbols to zero
+
+dataTX = debruijn_sequence(mpam.const_size, sim.L).'; % de Bruijin sequence
+
+dataTXext = wextend('1D', 'ppd', dataTX, sim.Ndiscard/mpam.symdim); % periodic extension
+dataTXext([1:2*sim.L/mpam.symdim end-2*sim.L/mpam.symdim:end]) = 0; % set 2L first and last symbols to zero
+
 
 if ~isfield(Tx.Mod,'type')
     Tx.Mod.type = 'EAM';
 end
-% predistortion assumes equal level spacing
+
+
 if isfield(sim, 'mzm_predistortion') && strcmpi(sim.mzm_predistortion, 'levels') %% Ordinary PAM with predistorted levels
     assert(strcmp(Tx.Mod.type,'MZM'),'predistortion is set but modulator is not MZM')
+    mpam = mpam.norm_levels;
     mpamPredist = mpam.mzm_predistortion(Tx.Mod.Vswing, Tx.Mod.Vbias, sim.shouldPlot('PAM levels MZM predistortion'));
     xk = mpamPredist.signal(dataTXext); % Modulated PAM signal
-    AGC = 1/(Apd.Geff*Fiber.link_attenuation(Tx.Laser.wavelength));
 else
-    % Ajust levels to desired transmitted power and extinction ratio
-    mpam = mpam.adjust_levels(Tx.Ptx, Tx.Mod.rexdB);
-    AGC = 1/(mpam.a(end)*Apd.Geff*Fiber.link_attenuation(Tx.Laser.wavelength));
-    
+    % Ajust levels to desired extinction ratio
+    mpam = mpam.adjust_levels(1,Tx.Mod.rexdB); 
+    mpam = mpam.norm_levels;
     xk = mpam.signal(dataTXext); % Modulated PAM signal
 end  
 
@@ -73,12 +76,14 @@ end
 RIN = sim.RIN;
 sim.RIN = false; % RIN is not modeled here since number of samples is not high enough to get accurate statistics
 sim.phase_noise = false; 
+Tx.Laser.PdBm = Watt2dBm(Tx.Ptx);
 Ecw = Tx.Laser.cw(sim);
 sim.RIN = RIN;
 
 % Modulate
 if strcmp(Tx.Mod.type, 'MZM')
     Etx = mzm(Ecw, xt, Tx.Mod.filt.H(sim.f/sim.fs)); % transmitted electric field
+    Etx = sqrt(2)*Etx;
 elseif strcmp(Tx.Mod.type, 'DML')
     xt = xt - min(xt);
     Etx = Tx.Laser.modulate(xt, sim);
@@ -86,12 +91,11 @@ else
     if ~isa(Tx.Mod.H,'function_handle')
         Tx.Mod.H =@(f) Tx.Mod.filt.H(f/sim.fs);
     end
-    [Etx, ~] = eam(Ecw, xt, Tx.Mod, sim.f);
+    [Etx, ~] = eam(Ecw, 2*xt, Tx.Mod, sim.f);
 end
 
 % Ensures that transmitted power is at the right level
 Padj = Tx.Ptx/mean(abs(Etx).^2);
-AGC = AGC/Padj;
 Etx = Etx*sqrt(Padj);
 
 %% Fiber propagation
@@ -107,15 +111,19 @@ end
 
 %% Automatic gain control
 mpam = mpam.norm_levels;
+AGC = 1/(2*Padj*Tx.Ptx*Rx.PD.Geff*Fiber.link_attenuation(Tx.Laser.wavelength));
 yt = yt*AGC;
 yt = yt - mean(yt) + mean(mpam.a);
 
 %% ADC
 % ADC performs filtering, quantization, and downsampling
-% For an ideal ADC, ADC.ENOB = Inf
-Rx.ADC.ros = 1; % symbol-rate sampling 
+% For an ideal ADC, ADC.ENOB = Inf 
 Rx.ADC.timeRefSignal = xt; % align filtered signal ytf to this reference
-[yk, ~, ytf] = adc(yt, Rx.ADC, sim, conj(HrxPshape));
+if ~strcmpi(Rx.eq.type, 'none')
+    [yk, ~, ~] = adc(yt, Rx.ADC, sim, conj(HrxPshape));
+else
+    [yk, ~, ~] = adc(yt, Rx.ADC, sim);        
+end
 
 %% Equalization
 [yd, Rx.eq] = equalize(Rx.eq, yk, HrxPshape, mpam, sim);
@@ -151,31 +159,92 @@ Sshd = Sshf(1:sim.Mct:end);
 Sshd = (AGC)^2*Sshd(sim.Ndiscard+1:end-sim.Ndiscard);
 
 %% Calculate error probabilities using Gaussian approximation for each transmitted symbol
-if not(mpam.optimize_level_spacing) && isfield(sim, 'mpamOpt') && not(isempty(sim.mpamOpt)) % use threshlds swept in montecarlo simulation
-    Pthresh = zeros(mpam.M-1, 1);
-    mpamOpt = sim.mpamOpt;
-    for k = 1:mpam.M-1
-        Pthresh(k) = (mpam.a(k+1)-mpam.a(k))/(mpamOpt.a(k+1)-mpamOpt.a(k))*(mpamOpt.b(k) - mpamOpt.a(k)) + mpam.a(k);
-    end
+% if not(mpam.optimize_level_spacing) && isfield(sim, 'mpamOpt') && not(isempty(sim.mpamOpt)) % use threshlds swept in montecarlo simulation
+%     Pthresh = zeros(mpam.M-1, 1);
+%     mpamOpt = sim.mpamOpt;
+%     for k = 1:mpam.M-1
+%         Pthresh(k) = (mpam.a(k+1)-mpam.a(k))/(mpamOpt.a(k+1)-mpamOpt.a(k))*(mpamOpt.b(k) - mpamOpt.a(k)) + mpam.a(k);
+%     end
+% else
+%     Pthresh = mpam.b; % decision thresholds referred to the receiver
+% end
+
+pe = zeros(mpam.const_size, 1); % symbol error probability for each level
+
+dat = mpam.map(dataTX);
+
+% sort by symbol
+indsort = dat == 0:mpam.M-1;
+[ysort,varsort] = deal(zeros(max(sum(indsort)),mpam.M));
+for m=1:mpam.M
+    len = sum(indsort(:,m));
+    ysort(1:len,m) = yd(indsort(:,m));
+    ysort(len+1:end,m) = nan;
+    varsort(1:len,m) = Sshd(indsort(:,m))';
+    varsort(len+1:end,m) = nan;
+end
+
+distr.condpr =@(x,m) nanmean(normpdf(reshape(x,1,[]),ysort(:,m),sqrt(varsort(:,m))));
+distr.tailpr =@(x,m) nanmean(qfunc((reshape(x,1,[])-ysort(:,m))./sqrt(varsort(:,m))));
+distr.mean = nanmean(ysort);
+distr.var = nanmean(varsort)+nanvar(ysort);
+
+% use tailpr to optimize thresholds
+mpam = mpam.optimize_thresholds_enum(distr);
+
+if mpam.M ~=3
+    pe(1) = distr.tailpr(mpam.b(1),1);
+    pe(2:mpam.M-1) = distr.tailpr(mpam.b(2:mpam.M-1)',2:mpam.M-1) + ...
+        1 - distr.tailpr(mpam.b(1:mpam.M-2)',2:mpam.M-1);
+    pe(mpam.M) = 1 - distr.tailpr(mpam.b(mpam.M-1),mpam.M);
 else
-    Pthresh = mpam.b; % decision thresholds referred to the receiver
-end
-
-pe = zeros(mpam.M, 1); % symbol error probability for each level
-dat = gray2bin(dataTX, 'pam', mpam.M); % fix index mapping
-for k = 1:Nsymb
-    sig = sqrt(Sshd(k));
+    bit_assign = [0 2 6 1 3 7 4 5];
+    d = 3*squareform(pdist(de2bi(bit_assign),'hamming'));
     
-    if dat(k) == mpam.M-1
-        pe(dat(k)+1) = pe(dat(k)+1) + qfunc((yd(k)-Pthresh(end))/sig);
-    elseif dat(k) == 0
-        pe(dat(k)+1) = pe(dat(k)+1) + qfunc((Pthresh(1)-yd(k))/sig);
-    else 
-        pe(dat(k)+1) = pe(dat(k)+1) + qfunc((Pthresh(dat(k) + 1) - yd(k))/sig);
-        pe(dat(k)+1) = pe(dat(k)+1) + qfunc((yd(k) - Pthresh(dat(k)))/sig);
-    end
+    Qr = distr.tailpr(mpam.b,1:mpam.M-1);   % right xover pr.
+    Ql = 1- distr.tailpr(mpam.b,2:mpam.M); % left xover pr.
+    
+    x = linspace(mpam.b(2),3*mpam.a(end),500)';
+    p68 = Ql(2)*Qr(2) + trapz(x,distr.condpr(x,3).*distr.tailpr(x,2));
+    
+    pe(1) = (Qr(1)-Qr(1)^2)*(d(1,2)+d(1,4))+Qr(1)^2*d(1,5);
+    pe(2) = (Ql(1)-Ql(1)*Qr(1))*d(1,2)+(Qr(2)-Qr(2)*Qr(1))*d(2,3)+...
+        (Qr(1)-Qr(1)*Ql(1)-Qr(1)*Qr(2))*d(2,5)+Ql(1)*Qr(1)*d(2,4)+...
+        Qr(2)*Qr(1)*d(2,6);
+    pe(3) = (Ql(2)-Ql(2)*Qr(1))*d(2,3) + Ql(2)*Qr(1)*d(3,5) +...
+        (Qr(1)-Qr(1)*Ql(2))*d(3,6);
+    pe(4) = (Ql(1)-Ql(1)*Qr(1))*d(1,4)+Qr(1)*Ql(1)*d(2,4)+...
+        (Qr(1)-Qr(1)*Ql(1)-Qr(1)*Qr(2))*d(4,5)+...
+        (Qr(2)-Qr(2)*Qr(1))*d(4,7)+Qr(1)*Qr(2)*d(2,8);
+    pe(5) = Ql(1)^2*d(1,5)+Ql(1)*(1-Ql(1)-Qr(2))*d(2,5)+...
+        Ql(1)*Qr(2)*d(3,5)+Ql(1)*(1-Ql(1)-Qr(2))*d(4,5)+...
+        Qr(2)*(1-Ql(1)-Qr(2)/2)*d(5,6)+Ql(1)*Qr(2)*d(5,7)+...
+        Qr(2)*(1-Ql(1)-Qr(2)/2)*d(5,8);
+    pe(6) = Ql(2)*Ql(1)*d(2,6)+Ql(1)*(1-Ql(2))*d(3,6)+...
+        Ql(2)*(1-Ql(1)-Qr(2))*d(5,6)+p68*d(6,8);
+    pe(7) = Ql(2)*(1-Qr(1))*d(4,7)+Qr(1)*Ql(2)*d(5,7)+...
+        Qr(1)*(1-Ql(2))*d(7,8);
+    pe(8) = Ql(1)*Ql(2)*d(4,8)+Ql(2)*(1-Ql(1)-Qr(2))*d(5,8)+p68*d(6,8)+...
+        Ql(1)*(1-Ql(2))*d(7,8);
 end
+berenum = mean(pe)/log2(mpam.const_size); 
 
-pe = real(pe)/Nsymb;
-
-berenum = sum(pe)/log2(mpam.M);
+if sim.shouldPlot('Conditional PDF') 
+    figure(110)
+    set(gca,'colororderindex',1)
+    for m=1:mpam.M
+        x=linspace(distr.mean(m)-4*sqrt(distr.var(m)),...
+            distr.mean(m)+4*sqrt(distr.var(m)));
+        plot(x,distr.condpr(x,m));
+        hold on;
+    end
+    grid on
+    xlabel('normalized voltage')
+    ylabel('pdf')
+%     set(gca,'colororderindex',1)
+%     plot(linspace(0,1),normpdf(linspace(0,1)',distr.mean,sqrt(distr.var)),'--')
+    vline(mpam.b)
+    hold off
+    title(num2str(berenum,'BER = %.2e'))
+    drawnow
+end

@@ -3,15 +3,17 @@ classdef PAM
     properties
         M % constellation size
         Rb % bit rate
-        level_spacing % 'equally-spaced' or 'optimized'
+        level_spacing % 'equally-spaced', 'optimized', or 'fixed'
         pulse_shape % struct containing the following fields {type: {'rectangular', 'root raised cosine', 'raised cosine'}, h: pulse shape impulse response i.e., coefficients of FIR filter,sbs: samples per symbol, and other parameters such as rolloff factor, etc}
         a % levels
         b % decision threshold
+        const_size  % number of PAM dimensions per symbol
     end
     
     properties (Dependent)
         Rs % symbol rate
         optimize_level_spacing % logical variable
+        symdim
     end
     
     properties (GetAccess=private)
@@ -22,7 +24,7 @@ classdef PAM
     end
        
     methods
-        function obj = PAM(M, Rb, level_spacing, pulse_shape)
+        function obj = PAM(M, Rb, level_spacing, pulse_shape, const_size)
             %% Class constructor
             % Inputs
             % - M = constellation size
@@ -51,6 +53,12 @@ classdef PAM
                 obj.pulse_shape = select_pulse_shape('rect', 1);
             end
             
+            if M == 3
+                obj.const_size = 8;
+            else
+                obj.const_size = M;
+            end
+            
             obj = obj.reset_levels();
         end
         
@@ -76,6 +84,10 @@ classdef PAM
         function optimize_level_spacing = get.optimize_level_spacing(self)
             %% True if level_spacing == 'optimized'
             optimize_level_spacing = strcmp(self.level_spacing, 'optimized');
+        end
+        
+        function symdim = get.symdim(self)
+            symdim = ceil(log(self.const_size)/log(self.M));
         end
         
         function H = Hpshape(self, f)
@@ -134,24 +146,29 @@ classdef PAM
             % respectively.
             
             rex = 10^(-abs(rexdB)/10); % extinction ratio. Defined as Pmin/Pmax
+            if self.M ~=3
+                amean = mean(self.a); % mean value
+            else
+                amean = sum([3/8 3/8 1/4]'.*self.a);
+            end
             switch self.level_spacing
                 case 'equally-spaced'
                     % Restart levels
                     self.a = ((0:2:2*(self.M-1))/(2*(self.M-1))).';
                     self.b = ((1:2:(2*(self.M-1)-1))/(2*(self.M-1))).';
-                    
-                    amean = mean(self.a); % mean value
-                    
+                                        
                     Pmin = 2*Ptx*rex/(1 + rex); % power of the lowest level 
                     Plevels = self.a*(Ptx/amean)*((1-rex)/(1+rex)) + Pmin; % levels at the transmitter
                     Pthresh = self.b*(Ptx/amean)*((1-rex)/(1+rex)) + Pmin; % decision thresholds at the transmitter
-                case 'optimized'
-                    amean = mean(self.a); % mean value
-                    
+                case 'optimized'                    
                     % Extinction ratio was already enforced in the
                     % optimization process, so just scale to desired power
                     Plevels = self.a*Ptx/amean; % levels at the transmitter
                     Pthresh = self.b*Ptx/amean; % decision thresholds at the transmitter
+                case 'fixed'
+                    Pmin = 2*Ptx*rex/(1 + rex); % power of the lowest level 
+                    Plevels = self.a*(Ptx/amean)*((1-rex)/(1+rex)) + Pmin; % levels at the transmitter
+                    Pthresh = self.b*(Ptx/amean)*((1-rex)/(1+rex)) + Pmin; % decision thresholds at the transmitter                    
                 otherwise
                     error('pam class: Invalid level spacing option')
             end
@@ -181,8 +198,8 @@ classdef PAM
             thresh = zeros(self.M-1, 1);
             for k = 1:self.M-1
                 % upward - downward
-                [t, ~, exitflag] = fzero(@(t) normpdf(t, self.a(k), noise_std(self.a(k)))...
-                    - normpdf(t, self.a(k+1), noise_std(self.a(k+1))), [self.a(k), self.a(k+1)]);
+                [t, ~, exitflag] = fzero(@(t) normcdf(self.a(k)-t,0, noise_std(self.a(k)))...
+                    - normcdf(t-self.a(k+1),0, noise_std(self.a(k+1))), [self.a(k), self.a(k+1)]);
                 
                 if exitflag ~= 1
                     warning('PAM/optimize_thresholds: threshold optimization exited with exit flag %d',exitflag)
@@ -193,22 +210,44 @@ classdef PAM
             
             self.b = thresh;
         end
+
+        function self = optimize_thresholds_enum(self, distr)
+            %% Given conditional probability distribution function, find threshold positions
+            thresh = zeros(self.M-1,1);
+            for k=1:self.M-1
+                try
+                [t, ~, exitflag] = fzero(@(t) 1 - distr.tailpr(t,k) - ...
+                    distr.tailpr(t,k+1),[distr.mean(k),distr.mean(k+1)]);
+                catch
+                    self.a                    
+                end
+                if exitflag ~= 1
+                    warning('PAM/optimize_thresholds: threshold optimization exited with exit flag %d',exitflag)
+                end
+                thresh(k) = t;
+            end
+            self.b = thresh;                
+        end
         
         function self = mzm_predistortion(self, Vswing, Vbias, verbose)
             %% Predistort levels to compensate for MZM nonlinear response in IM-DD
             predist = @(p) 2/pi*asin(sqrt(p));
             dist = @(v) sin(pi/2*v)^2;
             
-            Vmin = Vbias - Vswing/2;
-            Vmax = Vbias + Vswing/2;
+            if strcmp(self.level_spacing,'equally-spaced')
+                Vmin = Vbias - Vswing/2;
+                Vmax = Vbias + Vswing/2;
             
-            Pmax = dist(Vmax);
-            Pmin = dist(Vmin);
-            DP = (Pmax-Pmin)/(self.M-1);
-            Pk = Pmin:DP:Pmax;
-            
-            assert(all(Pk >= 0), 'mpam/mzm_predist: Pswing too high. Pswing must be such that all levels are non-negative')
-            
+                Pmax = dist(Vmax);
+                Pmin = dist(Vmin);
+                DP = (Pmax-Pmin)/(self.M-1);
+                Pk = Pmin:DP:Pmax;
+
+                assert(all(Pk >= 0), 'mpam/mzm_predist: Pswing too high. Pswing must be such that all levels are non-negative')
+            else
+                % ignore MZ parameters, just predistort optimized levels
+                Pk = self.a;
+            end
             % Predistortion
             Vk = predist(Pk);
             
@@ -255,8 +294,12 @@ classdef PAM
             % Input:
             % - dataTX = transmitted symbols from 0 to M-1
             % Outputs:
-            % - xd = symbols at symbol rate (1 x length(dataTX))            
-            xd = self.a(gray2bin(dataTX, 'pam', self.M) + 1).'; % 1 x length(dataTX)
+            % - xd = symbols at symbol rate (1 x length(dataTX))    
+            if self.M~=3
+                xd = self.a(gray2bin(dataTX, 'pam', self.M) + 1).'; % 1 x length(dataTX)
+            else
+                xd = self.a(self.map3pam(dataTX)+1).';
+            end
         end
         
         function dataRX = demod(self, yd)
@@ -266,7 +309,40 @@ classdef PAM
             % Output:
             % - dataRX = detected symbols
             dataRX = sum(bsxfun(@ge, yd(:), self.b.'), 2);
-            dataRX = bin2gray(dataRX, 'pam', self.M).';
+            if self.M ~=3
+                dataRX = bin2gray(dataRX, 'pam', self.M).';
+            else
+                dataRX = self.unmap3pam(dataRX, yd).';
+            end
+        end
+        
+        function dat = map(self, dataTX)
+            if self.M ~=3
+                dat = gray2bin(dataTX, 'pam', self.M); % fix index mapping
+            else
+                dat = self.map3pam(dataTX);
+            end
+        end
+        
+        function data3lev = map3pam(~, data8lev)
+            %% convert 8 level signal into 3 level PAM with 2x symbols
+            sig_const = [0 0; 1 0; 0 1; 1 1; 2 0; 2 1; 0 2; 1 2];
+            data3lev = reshape(sig_const(data8lev+1,:)',[],1);
+            if size(data8lev,1) == 1
+                data3lev = data3lev';
+            end
+        end
+        
+        function data8lev = unmap3pam(~, data3lev, yd)
+            demap = [0 2 6
+                     1 3 7
+                     4 5 -1];
+            data8lev = demap(sub2ind(size(demap),data3lev(1:2:end)+1,data3lev(2:2:end)+1));
+            if(exist('yd','var'))
+                invalid = data8lev==-1;
+                data8lev(invalid' & yd(1:2:end)>yd(2:2:end)) = demap(3,2);
+                data8lev(invalid' & yd(1:2:end)<=yd(2:2:end)) = demap(2,3);
+            end
         end
         
         function [dataRX, mpamOpt] = demod_sweeping_thresholds(self, yd, dataTX, validInd, verbose)
@@ -342,22 +418,58 @@ classdef PAM
             % - ber = total ber
             % - berk = ber of the kth level. self actually corresponds to 
             % bertail_levels = p(error | given symbol)p(symbol)
-            ser = zeros(1, self.M);
-            for k = 1:self.M
-                if k == 1
-                    ser(k) = ser(k) + qfunc((self.b(1) - self.a(1))/noise_std(self.a(1)));
-                elseif k == self.M
-                    ser(k) = ser(k) + qfunc((self.a(k) - self.b(k-1))/noise_std(self.a(k)));
-                else
-                    ser(k) = ser(k) + qfunc((self.b(k) - self.a(k))/noise_std(self.a(k)));
-                    ser(k) = ser(k) + qfunc((self.a(k) - self.b(k-1))/noise_std(self.a(k)));
+          
+            ser = zeros(1, self.const_size);
+            if self.symdim == 1
+                for k = 1:self.M
+                    if k == 1
+                        ser(k) = ser(k) + qfunc((self.b(1) - self.a(1))/noise_std(self.a(1)));
+                    elseif k == self.M
+                        ser(k) = ser(k) + qfunc((self.a(k) - self.b(k-1))/noise_std(self.a(k)));
+                    else
+                        ser(k) = ser(k) + qfunc((self.b(k) - self.a(k))/noise_std(self.a(k)));
+                        ser(k) = ser(k) + qfunc((self.a(k) - self.b(k-1))/noise_std(self.a(k)));
+                    end
                 end
-            end
 
             ser = ser/self.M;
             
             berk = ser/log2(self.M); % self corresponds to p(error | given symbol)p(symbol)
             ber = sum(berk);
+            else
+                bit_assign = [0 2 6 1 3 7 4 5];
+                d = 3*squareform(pdist(de2bi(bit_assign),'hamming'));
+
+                Qr = qfunc((self.b-self.a(1:end-1))./noise_std(self.a(1:end-1)));   % right xover pr.
+                Ql = normcdf((self.b-self.a(2:end))./noise_std(self.a(2:end))); % left xover pr.
+
+                x = linspace(self.b(2),3*self.a(end),500);
+                p68 = Ql(2)*Qr(2) + ...
+                    trapz(x,normpdf(x,self.a(end),noise_std(self.a(end)))...
+                    .*qfunc((x-self.a(2))./noise_std(self.a(2))));
+
+                pek(1) = (Qr(1)-Qr(1)^2)*(d(1,2)+d(1,4))+Qr(1)^2*d(1,5);
+                pek(2) = (Ql(1)-Ql(1)*Qr(1))*d(1,2)+(Qr(2)-Qr(2)*Qr(1))*d(2,3)+...
+                    (Qr(1)-Qr(1)*Ql(1)-Qr(1)*Qr(2))*d(2,5)+Ql(1)*Qr(1)*d(2,4)+...
+                    Qr(2)*Qr(1)*d(2,6);
+                pek(3) = (Ql(2)-Ql(2)*Qr(1))*d(2,3) + Ql(2)*Qr(1)*d(3,5) +...
+                    (Qr(1)-Qr(1)*Ql(2))*d(3,6);
+                pek(4) = (Ql(1)-Ql(1)*Qr(1))*d(1,4)+Qr(1)*Ql(1)*d(2,4)+...
+                    (Qr(1)-Qr(1)*Ql(1)-Qr(1)*Qr(2))*d(4,5)+...
+                    (Qr(2)-Qr(2)*Qr(1))*d(4,7)+Qr(1)*Qr(2)*d(2,8);
+                pek(5) = Ql(1)^2*d(1,5)+Ql(1)*(1-Ql(1)-Qr(2))*d(2,5)+...
+                    Ql(1)*Qr(2)*d(3,5)+Ql(1)*(1-Ql(1)-Qr(2))*d(4,5)+...
+                    Qr(2)*(1-Ql(1)-Qr(2)/2)*d(5,6)+Ql(1)*Qr(2)*d(5,7)+...
+                    Qr(2)*(1-Ql(1)-Qr(2)/2)*d(5,8);
+                pek(6) = Ql(2)*Ql(1)*d(2,6)+Ql(1)*(1-Ql(2))*d(3,6)+...
+                    Ql(2)*(1-Ql(1)-Qr(2))*d(5,6)+p68*d(6,8);
+                pek(7) = Ql(2)*(1-Qr(1))*d(4,7)+Qr(1)*Ql(2)*d(5,7)+...
+                    Qr(1)*(1-Ql(2))*d(7,8);
+                pek(8) = Ql(1)*Ql(2)*d(4,8)+Ql(2)*(1-Ql(1)-Qr(2))*d(5,8)+p68*d(6,8)+...
+                    Ql(1)*(1-Ql(2))*d(7,8);     
+                berk = pek/3/8;
+                ber = mean(pek)/3;
+            end
         end
         
         function [PreqdBm, BER] = required_power(self, N0, BERtarget)
@@ -417,16 +529,16 @@ classdef PAM
             
             % Error probability
             Pe = log2(self.M)*BERtarget*(self.M/(2*(self.M-1)));
-            [Qreq, ~, exitflag] = fzero(@(Q) qfunc(Q) - Pe, 0);
-            if exitflag ~= 1
-                warning('level_spacing_optm: threshold optimization did not converge');
-            end
+            Qreq = qfuncinv(Pe);
             
             % Initialize levels and thresholds
             aopt = zeros(self.M, 1);
             bopt = zeros(self.M-1, 1);
 
             rex = 10^(-abs(rexdB)/10);
+            if rex == 0
+                self.maxit = 2;
+            end
 
             tol = Inf;
             k = 1;
@@ -443,7 +555,8 @@ classdef PAM
                     bopt(level) = aopt(level) + abs(dPthresh);
 
                     % Find next level  
-                    [dPlevel, ~, exitflag] = fzero(@(dPlevel) qfunc(abs(dPlevel)/noise_std(bopt(level) + abs(dPlevel))) - Pe, 0);    
+%                     [dPlevel, ~, exitflag] = fzero(@(dPlevel) qfunc(abs(dPlevel)/noise_std(bopt(level) + abs(dPlevel))) - Pe, 0);    
+                    [dPlevel, ~, exitflag] = fzero(@(dPlevel) abs(dPlevel)/noise_std(bopt(level)+abs(dPlevel)) - Qreq,0);
 
                     if exitflag ~= 1
                         warning('level_spacing_optm: level optimization did not converge');     
@@ -474,6 +587,57 @@ classdef PAM
                 title('Level optimization convergece')
                 drawnow
             end 
+        end   
+    
+        function self = optimize_level_spacing_enum(self, BERtarget, distr)
+            %% Level spacing (a) and decision threshold (b) optmization
+            % Assumes infinite extinction ratio at first, then corrects power and
+            % optmize levels again
+            % The levels and thresholds calculated are at the receiver
+            % (i.e., after any amplification)
+            % Error probability under a single tail for a given symbol
+            % Inputs:
+            % - BERtarget = target BER
+            % - distr = struct with tail probability function and mean of
+            % each level
+            % - verbose = whether to plot algorithm convergence curve
+            % Outputs:
+            % - aopt, bopt = optimized levels and decision thresholds, 
+            % respectively.
+            
+            % Error probability
+            if self.M~=3
+                Pe = log2(self.M)*BERtarget*(self.M/(2*(self.M-1)));
+            else
+                Pe = BERtarget;
+            end
+            
+            % Initialize levels and thresholds
+            sc = self.a(end);
+            aopt = distr.mean;
+            bopt = zeros(self.M-1, 1);
+
+            for level = 1:self.M-1
+                % Find threshold
+                [dPthresh,~,exitflag] = fzero(@(V) Pe - distr.tailpr(V,level),distr.mean(level));
+                if exitflag ~= 1
+                    warning('level_spacing_optm: level optimization did not converge');     
+                end                
+                bopt(level) = aopt(level) - distr.mean(level) + dPthresh;
+
+                % Find next level      
+                [dPlevel, ~, exitflag] = fzero(@(V) 1 - Pe - distr.tailpr(V,level+1),distr.mean(level+1));
+                if exitflag ~= 1
+                    warning('level_spacing_optm: level optimization did not converge');     
+                end
+                aopt(level+1) = bopt(level) + distr.mean(level+1) - dPlevel;
+            end
+            
+            self.b = bopt*sc;
+            self.a = (aopt - distr.mean)'*sc + self.a;  
+            if any(self.a<0)
+                self.a
+            end          
         end       
     end
     
@@ -488,6 +652,7 @@ classdef PAM
                 h = h/h((n+1)/2);
             end
         end
+        
     end
             
     %% Validation methods

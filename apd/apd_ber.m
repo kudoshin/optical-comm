@@ -24,10 +24,13 @@ if isfield(sim, 'OptimizeGain') && sim.OptimizeGain
     % if mpam.level_spacing = 'optimized', then Apd.optGain returns mpam 
     % with optimal level spacing
 elseif mpam.optimize_level_spacing  %% Level Spacing Optimization
-    % Optimize levels using Gaussian approximation
-    [~, mpam] = Apd.optimize_PAM_levels(Apd.Gain, mpam, Tx, Fiber, Rx, sim);
-    mpam = mpam.norm_levels();
+    % Optimize levels using enumerated pdfs without quantization
+    temp = sim.quantiz;
+    sim.quantiz = false;
+    [ber.preq, mpam] = Apd.optimize_PAM_levels(Apd.Gain, mpam, Tx, Fiber, Rx, sim);
+    sim.quantiz=temp;
 end
+mpam = mpam.norm_levels();
 
 %% BER
 % Transmitted power
@@ -36,18 +39,19 @@ Ptx = dBm2Watt(Tx.PtxdBm);
 ber.count = zeros(size(Ptx)); % counted BER
 ber.enum = zeros(size(Ptx)); % analysis assuming Gaussian stats
 ber.awgn = zeros(size(Ptx)); % AWGN approximation (includes noise enhancement penalty)
+ber.pe = zeros(length(Ptx),mpam.const_size); % crossover probabilities from enumeration
 run_montecarlo = true;
 for k = 1:length(Ptx)
     Tx.Ptx = Ptx(k);
             
+    % BER using Gaussian stats approximation for shot noise (enumeration)
+    [ber.enum(k),ber.pe(k,:)] = ber_apd_enumeration(mpam, Tx, Fiber, Apd, Rx, sim);
+    
     % Montecarlo simulation
     if run_montecarlo
-        [ber.count(k), mpamOpt] = ber_apd_montecarlo(mpam, Tx, Fiber, Apd, Rx, sim);
-        sim.mpamOpt = mpamOpt; % optimized by sweeping thresholds if levels are equally spaced
+        hold on
+        [ber.count(k), ~] = ber_apd_montecarlo(mpam, Tx, Fiber, Apd, Rx, sim);
     end
-    
-    % BER using Gaussian stats approximation for shot noise (enumeration)
-    ber.enum(k) = ber_apd_enumeration(mpam, Tx, Fiber, Apd, Rx, sim);
     
     % BER using AWGN system approximation including noise enhacement
     ber.awgn(k) = ber_apd_awgn(mpam, Tx, Fiber, Apd, Rx, sim);

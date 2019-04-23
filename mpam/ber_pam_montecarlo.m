@@ -17,6 +17,7 @@ if isfield(sim, 'mzm_predistortion') && strcmpi(sim.mzm_predistortion, 'levels')
     mpamPredist = mpam.mzm_predistortion(Tx.Mod.Vswing, Tx.Mod.Vbias, sim.shouldPlot('PAM levels MZM predistortion'));
     xd = mpamPredist.signal(dataTX); % Modulated PAM signal
 else
+    mpam = mpam.adjust_levels(1, Tx.Mod.rexdB);
     xd = mpam.signal(dataTX); % Modulated PAM signal
 end  
 
@@ -54,14 +55,15 @@ Tx.Laser.H = @(f) Tx.Mod.filt.H(f/sim.fs);
 Ecw = Tx.Laser.cw(sim);
 if strcmp(Tx.Mod.type, 'MZM')
     Etx = mzm(Ecw, xt, Tx.Mod.H); % transmitted electric field
+    Etx = Etx*sqrt(2);
 elseif strcmp(Tx.Mod.type, 'DML')
     xt = xt - min(xt);
     Etx = Tx.Laser.modulate(xt, sim);
 elseif strcmp(Tx.Mod.type, 'EAM')
     Tx.Mod.H =Tx.Laser.H;
-    [Etx, ~] = eam(Ecw, xt, Tx.Mod, sim.f);
+    [Etx, ~] = eam(Ecw, 2*xt, Tx.Mod, sim.f);
 else
-    error('ber_pam_montecarlo: Invalid modulator type. Expecting Tx.Mod.type to be either MZM or DML')
+    error('ber_pam_montecarlo: Invalid modulator type. Expecting Tx.Mod.type to be either MZM, DML, or EAM')
 end
 
 % Adjust power to ensure that desired power is transmitted
@@ -125,13 +127,15 @@ fprintf('> Received power: %.2f dBm\n', PrxdBm);
 
 % Whitening filter
 if sim.WhiteningFilter
-    [~, yt] = Rx.PD.Hwhitening(sim.f, mean(sum(abs(Erx).^2),2), Rx.N0, yt);
+    [~, yt] = Rx.PD.Hwhitening(sim.f, mean(sum(abs(Erx).^2),1), Rx.N0, yt);
 end
 
 % Gain control
-mpam = mpam.unbias;
-yt = yt - mean(yt); % zero mean
-yt = yt*sqrt(mean(abs(mpam.a).^2)/(sqrt(2)*mean(abs(yt).^2))); % scale to same mean power as mpam levels
+AGC = 1/(2*Tx.Ptx*Rx.PD.Geff*Fibers(1).link_attenuation(Tx.Laser.wavelength));
+mpam = mpam.norm_levels;
+yt = yt*AGC;
+yt = yt - mean(yt) + mean(mpam.a); % adjust mean
+% yt = yt*sqrt(mean(abs(mpam.a).^2)/(sqrt(2)*mean(abs(yt).^2))); % scale to same mean power as mpam levels
 
 % system frequency responses
 [HrxPshape, H] = apd_system_received_pulse_shape(mpam, Tx, Fibers(1), Rx.PD, Rx, sim);
@@ -237,7 +241,7 @@ end
 
 if sim.shouldPlot('Signal after equalization')
     mpam = mpam.norm_levels();
-    figure(105), clf, box on, hold on
+    figure(106), clf, box on, hold on
     h1 = plot(ydfull, 'o');
     a = axis;
     h2= plot(a(1:2), (mpam.a*[1 1]).', '-k');
@@ -247,12 +251,12 @@ if sim.shouldPlot('Signal after equalization')
     legend([h1 h2(1) h3(1) h4], {'Equalized samples', 'PAM levels',...
         'Decision thresholds', 'BER measurement window'})
     title('Signal after equalization')
-%     axis([1 sim.Nsymb -0.2 1.2])
+    axis([1 sim.Nsymb -0.2 1.2])
     drawnow
 end
 
 if sim.shouldPlot('Heuristic noise pdf')
-    figure(106)
+    figure(107)
     [nn, xx] = hist(yd(dataTX == 2), 50);
     nn = nn/trapz(xx, nn);
     bar(xx, nn)
@@ -260,7 +264,7 @@ if sim.shouldPlot('Heuristic noise pdf')
 end
 
 if sim.shouldPlot('Decision errors')
-    figure(107)
+    figure(108)
     stem(dataRX ~= dataTX)
     ylabel('Errors')
     xlabel('Symbol')
