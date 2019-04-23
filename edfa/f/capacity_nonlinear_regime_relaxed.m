@@ -37,11 +37,23 @@ D = problem.nonlinear_coeff;
 epsilon = problem.epsilon;
 
 % Unpack optimization variables
-E.L = X(1);
-Signal.P = dBm2Watt(X(2:end));
+% If EDF length is specified, optimization is done only over signal power
+if isfield(problem, 'EDF_length')
+    Signal.PdBm = X;
+else
+    E.L = X(1);
+    Signal.PdBm = X(2:end);
+end
+
+S_and_ASE = Signal;
+A = 10^(mean(spanAttdB)/10);
+a = (A-1)/A;
+NF = 2*a*nsp;
+Acc_ASE = (Namp-1)*df*NF.*Signal.Ephoton;
+S_and_ASE.P = S_and_ASE.P + Acc_ASE;
 
 % Compute Gain using semi-analytical model
-[GaindB, ~, ~, dGaindB, dGaindB_L] = E.semi_analytical_gain(Pump, Signal);
+[GaindB, ~, ~, dGaindB, dGaindB_L] = E.semi_analytical_gain(Pump, S_and_ASE);
 
 %% Nonlinear noise at the nth channel
 offChs = (GaindB < spanAttdB);
@@ -55,18 +67,15 @@ if nargout > 1 % gradient was requested
     % Multiply by gain, since dNL is originally computed with respect to 
     % the launch power, while the optimzation is done with the input power
     % to the amplifier
-    dNL = dNL.*(10.^(spanAttdB/10)); 
+%     dNL = dNL.*(10.^(spanAttdB/10)); 
 else
     NL = GN_model_noise(P, D);
 end
 
 % Scale NL noise to "Namp" spans
-NL = NL*Namp^(1+epsilon);
+NL = (10.^(-spanAttdB/10)).*NL*(Namp^(1+epsilon));
 
 %% Relaxations: (i) NF is gain independent, (ii) step function approximation
-A = 10^(mean(spanAttdB)/10);
-a = (A-1)/A;
-NF = 2*a*nsp;
 SNR = Signal.P./(Namp*df*NF.*Signal.Ephoton + NL);
 SElamb = 2*log2(1 + Gap*SNR).*step_approx(GaindB - spanAttdB);
 SE = -sum(SElamb);
@@ -81,14 +90,18 @@ if nargout > 1 % gradient was requested
     
     diff_step_approx = problem.diff_step_approx;
         
-    % SE gradient with respect to EDF length
-    dSE_L = -2*sum(dGaindB_L.'.*diff_step_approx(GaindB - spanAttdB).*log2(1 + Gap*SNR));
-    
     % SE gradient with respect to channel power
     %     dSElin = -2/log(2)*sum(dSNR.*(S./(1 + SNR)), 2); % Considering dG/dP = 0
-    dSE_P = -2/log(2)*sum(dGaindB.*(log(1 + Gap*SNR).*diff_step_approx(GaindB - spanAttdB))  + Gap*dSNR.*(S./(1 + Gap*SNR)), 2); % Considering non-zero gain gradient
+    dSE_P = -2/log(2)*sum(dGaindB.*(log(1 + Gap*SNR).*diff_step_approx(GaindB - spanAttdB)) + Gap*dSNR.*(S./(1 + Gap*SNR)), 2); % Considering non-zero gain gradient
     dSE_PdBm = (log(10)/10)*(Signal.P.'.*dSE_P); % converts to derivative with power in dBm
     
-    dSE = [dSE_L; dSE_PdBm];
-%     dSE = dSE_PdBm;
+    % If EDF length is specified, optimization is done only over signal power
+    if isfield(problem, 'EDF_length') 
+        dSE = dSE_PdBm;
+    else
+        % SE gradient with respect to EDF length
+        dSE_L = -2*sum(dGaindB_L.'.*diff_step_approx(GaindB - spanAttdB).*log2(1 + Gap*SNR));
+        
+        dSE = [dSE_L; dSE_PdBm];
+    end
 end

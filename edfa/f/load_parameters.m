@@ -1,27 +1,60 @@
-function edf_param = edf_selection(fiber_type)
-%% Select EDF
-
-switch(lower(fiber_type))
+function E = load_parameters(E)
+%% Updates instance of EDF class with parameters corresponding to E.type
+% Corning data is more complete and consistent. Other data sets were
+% obtained from textbooks or papers.
+switch(lower(E.type))
     %% Data provided by corning
     case 'corning_type1' 
         try
-            load('corning_edf.mat')
+            param = load('data_corning_type1.mat');
         catch
-            error('File corning_edf.mat not found. Add folder data/ to Matlab path.')
+            error('File data_corning_type1.mat not found. Add folder data/ to Matlab path.')
         end  
-               
-        edf_param.absorption_coeff_fun = fun_abs;
-        edf_param.gain_coeff_fun = fun_gain;
-        
-    case 'corning (new)'
+            
+        E.excess_loss = 0; % (dB/m) excess loss due to splices for instance. 
+        E.gp_980nm = 0; % gain coefficient is assumed 0, so that two-level system can be used
+        E.alphap_980nm = param.pump_absorption_coeff_fun(980);% absorption cross section near 980 nm (dB/m). 
+        E.core_radius = param.core_radius; % Fiber core radius
+        E.doping_radius =  param.Er_radius; % Er3+ core radius
+        E.rho0 = param.Er_ion_ensity; % Er3+ concentraction (cm^-3)
+        E.NA = param.NA; % numerical aperture, e.g., 0.28 in [4, pg. 156]
+        E.tau = param.metastable_lifetime; % metastable lifetime in s        
+        E.param = param;
+
+    case 'corning_exp'
         try
-            load('corning_edf_new.mat')
+            param = load('data_corning_new.mat');
         catch
-            error('File corning_edf_new.mat not found. Add folder data/ to Matlab path.')
+            error('File data_corning_new.mat not found. Add folder data/ to Matlab path.')
         end  
                
-        edf_param.absorption_coeff_fun = fun_abs;
-        edf_param.gain_coeff_fun = fun_gain;
+        E.excess_loss = 0; % (dB/m) excess loss due to splices for instance. 
+        E.gp_980nm = 0; % gain coefficient is assumed 0, so that two-level system can be used
+        E.alphap_980nm = param.pump_absorption_coeff_fun(980);% absorption cross section near 980 nm (dB/m). 
+        E.core_radius = param.core_radius; % Fiber core radius
+        E.doping_radius =  param.Er_radius; % Er3+ core radius
+        E.rho0 = param.Er_ion_ensity; % Er3+ concentraction (cm^-3)
+        E.NA = param.NA; % numerical aperture, e.g., 0.28 in [4, pg. 156]
+        E.tau = param.metastable_lifetime; % metastable lifetime in s        
+        E.param = param;
+        
+    case 'corning high na'
+        try
+            param = load('data_corning_high_na.mat');
+        catch
+            error('File corning_high_na.mat not found. Add folder data/ to Matlab path.')
+        end  
+               
+        E.excess_loss = 0; % (dB/m) excess loss due to splices for instance. 
+        E.gp_980nm = 0; % gain coefficient is assumed 0, so that two-level system can be used
+        E.alphap_980nm = param.pump_absorption_coeff_fun(980);% absorption cross section near 980 nm (dB/m). 
+        E.core_radius = param.core_radius; % Fiber core radius
+        E.doping_radius =  param.Er_radius; % Er3+ core radius
+        E.rho0 = param.Er_ion_ensity; % Er3+ concentraction (cm^-3)
+        E.NA = param.NA; % numerical aperture, e.g., 0.28 in [4, pg. 156]
+        E.tau = param.metastable_lifetime; % metastable lifetime in s        
+        E.param = param;
+
 
     %% Experimental absorption and emission cross section line shapes 
     % of 1.55um transition of Er3+ in alumino-germanosilicate glass.
@@ -44,6 +77,9 @@ switch(lower(fiber_type))
         edf_param.ems_cross_sec.d = 1e-9*[75 40 19 8.5 20 8.5 20 50]; 
 
         edf_param.eta_peak = 0.84; % cross-section ratio
+        
+        E.param = edf_param;
+        
     case 'principles_type2'    
 
         % Fiber type II       
@@ -58,6 +94,8 @@ switch(lower(fiber_type))
         edf_param.ems_cross_sec.d = 1e-9*[50 42 32 11 31 10 60];
 
         edf_param.eta_peak = 0.9; % cross-section ratio
+        
+        E.param = edf_param;
     case 'principles_type3' 
         % Fiber type III       
         edf_param.abs_peak = 4.7e-25; % Table 4.1 of Principles
@@ -72,6 +110,8 @@ switch(lower(fiber_type))
 
         edf_param.eta_peak = 0.9;
         
+        E.param = edf_param;
+        
     %% Gain and absorption coefficients extracted from "Modeling Erbium-doped fiber amplifiers" by Giles and Desurvire
     % Ge:silicate fiber. Fig. 2a
     case 'giles_ge:silicate'
@@ -82,6 +122,8 @@ switch(lower(fiber_type))
         end
         edf_param.absorption_coeff_fun = fit_abs;
         edf_param.gain_coeff_fun = fit_gain;
+        
+        E.param = edf_param;
     
     % Al:Ge:silicate fiber. Fig. 2b
     case 'giles_al:ge:silicate' 
@@ -92,6 +134,8 @@ switch(lower(fiber_type))
         end
         edf_param.absorption_coeff_fun = fit_abs;
         edf_param.gain_coeff_fun = fit_gain;
+        
+        E.param = edf_param;
         
     otherwise
         error('EDF: invalid fiber type. Options are giles_ge:silicate, giles_al:ge:silicate, principles_type1, principles_type2 and principles_type3')

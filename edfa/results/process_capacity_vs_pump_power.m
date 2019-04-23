@@ -5,11 +5,13 @@ addpath ../
 addpath ../f/
 addpath ../../f/
 
-folder = 'capacity_vs_pump_power';
-edf_type = 'corning_type1';
+% folder = 'capacity_vs_pump_power_new';
+folder = 'capacity_vs_pump_power_high_na';
+% folder = 'capacity_vs_pump_power_NL_correct';
+edf_type = 'corning high NA';
 ChDf = 50;
 pumpWavelengthnm = 980;
-pumpPowermW = [20:5:150 160:10:200 250:50:400]; %%[30:5:100 150:50:250 275:25:400 450:50:1000];
+pumpPowermW = [25:5:200 225:25:400]; %%[30:5:100 150:50:250 275:25:400 450:50:1000];
 % pumpPowermW = [50 150];
 Nspans = 287; % 317
 spanLengthKm = 50; % 
@@ -19,13 +21,13 @@ Pin = zeros(length(pumpWavelengthnm), length(pumpPowermW));
 Pout = zeros(length(pumpWavelengthnm), length(pumpPowermW));
 lin.Lopt = zeros(length(pumpWavelengthnm), length(pumpPowermW));
 nlin.Lopt = zeros(length(pumpWavelengthnm), length(pumpPowermW));
-nlin_unc.Lopt = zeros(length(pumpWavelengthnm), length(pumpPowermW));
+nlin_sfn.Lopt = zeros(length(pumpWavelengthnm), length(pumpPowermW));
 lin.SEnum = zeros(length(pumpWavelengthnm), length(pumpPowermW));
 lin.SEapprox = zeros(length(pumpWavelengthnm), length(pumpPowermW));
 nlin.SEnum = zeros(length(pumpWavelengthnm), length(pumpPowermW));
 nlin.SEapprox = zeros(length(pumpWavelengthnm), length(pumpPowermW));
-nlin_unc.SEnum = zeros(length(pumpWavelengthnm), length(pumpPowermW));
-nlin_unc.SEapprox = zeros(length(pumpWavelengthnm), length(pumpPowermW));
+nlin_sfn.SEnum = zeros(length(pumpWavelengthnm), length(pumpPowermW));
+nlin_sfn.SEapprox = zeros(length(pumpWavelengthnm), length(pumpPowermW));
 BW = zeros(length(pumpWavelengthnm), length(pumpPowermW));
 PCE = zeros(length(pumpWavelengthnm), length(pumpPowermW));
 PCEmax = zeros(length(pumpWavelengthnm), length(pumpPowermW));
@@ -75,12 +77,18 @@ for n = 1:length(pumpWavelengthnm)
             % Optimized power loading
             figure(202), hold on, box on
 %             hplot = plot(lnm, S.nlin.S.PdBm, '-');
-            plot(lnm, S.nlin_unc.S.PdBm, '-') %, 'Color', get(hplot, 'Color')
-%             plot(lnm, S.nlin_sfn.S.PdBm, '-')
+%             plot(lnm, S.nlin_unc.S.PdBm, '-') %, 'Color', get(hplot, 'Color')
+            try 
+                plot(lnm, S.nlin_unc.S.PdBm, '-')
+            catch e
+                disp(e.message)
+                S.nlin_sfn =  S.nlin;
+                plot(lnm, S.nlin_sfn.S.PdBm, '-')
+            end
             %legend('PSO', 'Quasi-Newton', 'Saddle-free Newton')
             xlabel('Wavelength (nm)')
             ylabel('Optmized channel power (dBm)')
-%             title('Nonlinear regime')
+            title('Nonlinear regime: hybrid opt')
             ylim([-20 -10])
             
             if S.nlin.exitflag == 1
@@ -94,7 +102,7 @@ for n = 1:length(pumpWavelengthnm)
                 disp('Nonlinear regime hybrid optimization converged')
             else
                 pumpPowermW(p)
-                warning('Nonlinear regime hybrid optimization did not converge')
+                warning('Nonlinear regime hybrid unconstrained optimization did not converge')
             end
             
 %             fprintf('Saddle-free Newton exitflag = %d\n', S.nlin_sfn.exitflag)
@@ -108,18 +116,19 @@ for n = 1:length(pumpWavelengthnm)
             ylabel('Spectral efficiency (bit/s/Hz)')
             legend('Numerical', 'Approximated')
 %             legend('PSO: Numerical', 'PSO: Approximated', 'Hybrid: Numerical', 'Hybrid: Approximated')
-            title('Nonlinear regime')
+            title('Nonlinear regime: PSO')
             
             nlin.SEnum(n, p) = sum(S.nlin.num.SE);
             nlin.SEapprox(n, p) = sum(S.nlin.approx.SE);
             nlin.Lopt(n, p) = S.nlin.E.L;
             
-            nlin_unc.SEnum(n, p) = sum(S.nlin_unc.num.SE);
-            nlin_unc.SEapprox(n, p) = sum(S.nlin_unc.approx.SE);
-            nlin_unc.Lopt(n, p) = S.nlin.E.L;
+            nlin_sfn.SEnum(n, p) = sum(S.nlin_unc.num.SE);
+            nlin_sfn.SEapprox(n, p) = sum(S.nlin_unc.approx.SE);
+            nlin_sfn.Lopt(n, p) = S.nlin_unc.E.L;
             
-            NLpower(p) = sum(S.nlin.num.NL(S.nlin.S.P ~= 0));
-            ASEpower(p) = sum(S.nlin.num.Pase(S.nlin.S.P ~= 0));
+            NLpower(p) = sum(S.nlin_unc.num.NL(S.nlin_unc.S.P ~= 0));
+            ASEpower(p) = sum(S.nlin_unc.num.Pase(S.nlin_unc.S.P ~= 0));
+            Watt2dBm(sum(S.nlin_unc.S.P))
                             
 %             subplot(222), hold on, box on
 %             plot(lamb, num_opt.GaindB, '-', 'Color', get(hplot, 'Color'), 'DisplayName', 'Numerical');
@@ -155,11 +164,15 @@ for n = 1:length(pumpWavelengthnm)
 %             ylabel('SNR (dB)')
 %             axis([lamb([1 end]) 0 20])
 %             
+            SingalOut = S.nlin_unc.S;
+            SingalOut.PdBm = SingalOut.PdBm + S.nlin_unc.num.GaindB;
+            [PCE(n, p), PCEmax(n, p)] = S.E.power_conversion_efficiency(S.Pump, S.nlin_sfn.S, SingalOut);
+
             drawnow
             
             lnm = S.lin.S.lnm(S.lin.S.P ~= 0);
             fprintf('Linear regime\nBW = %.2f nm, lambda_min = %.1f nm, lambda_max = %.1f nm\n', lnm(end)-lnm(1), lnm(1), lnm(end))
-            lnm = S.nlin.S.lnm(S.nlin.S.P ~= 0);
+            lnm = S.nlin_sfn.S.lnm(S.nlin_sfn.S.P ~= 0);
             fprintf('Nonlinear regime\nBW = %.2f nm, lambda_min = %.1f nm, lambda_max = %.1f nm\n', lnm(end)-lnm(1), lnm(1), lnm(end))
             
         catch e
@@ -172,41 +185,41 @@ for n = 1:length(pumpWavelengthnm)
             nlin.SEapprox(n, p) = NaN;
             nlin.Lopt(n, p) = NaN;
             
-            nlin_unc.SEnum(n, p) = NaN;
-            nlin_unc.SEapprox(n, p) = NaN;
-            nlin_unc.Lopt(n, p) = NaN;
+            nlin_sfn.SEnum(n, p) = NaN;
+            nlin_sfn.SEapprox(n, p) = NaN;
+            nlin_sfn.Lopt(n, p) = NaN;
         end
     end
     
     figure(1), hold on, box on
     plot(pumpPowermW, lin.Lopt(n, :), 'LineWidth', 2, 'DisplayName', 'Linear regime')
     plot(pumpPowermW, nlin.Lopt(n, :), 'LineWidth', 2, 'DisplayName', 'Nonlinear regime')
-    plot(pumpPowermW, nlin_unc.Lopt(n, :), 'LineWidth', 2, 'DisplayName', 'Nonlinear regime: hybrid opt')
+    plot(pumpPowermW, nlin_sfn.Lopt(n, :), 'LineWidth', 2, 'DisplayName', 'Nonlinear regime: hybrid opt')
     xlabel('Pump power (mW)', 'FontSize', 12)
     ylabel('Optimal EDF length (m)', 'FontSize', 12)
     legend('-dynamiclegend')
     set(gca, 'FontSize', 12)
     
-%     figure(2), hold on, box on
-%     plot(pumpPowermW, 100*PCE(n, :), 'LineWidth', 2, 'DisplayName', sprintf('%d nm', pumpWavelengthnm(n)))
-%     plot(pumpPowermW, 100*PCEmax(n, :), 'k', 'LineWidth', 2, 'DisplayName', 'Theoretical limit')
-%     xlabel('Pump power (mW)', 'FontSize', 12)
-%     ylabel('Power conversion efficiency (%)', 'FontSize', 12)
-%     legend('-dynamiclegend', 'Location', 'SouthEast')
-%     set(gca, 'FontSize', 12)
+    figure(2), hold on, box on
+    plot(pumpPowermW, 100*PCE(n, :), 'LineWidth', 2, 'DisplayName', sprintf('%d nm', pumpWavelengthnm(n)))
+    plot(pumpPowermW, 100*PCEmax(n, :), 'k', 'LineWidth', 2, 'DisplayName', 'Theoretical limit')
+    xlabel('Pump power (mW)', 'FontSize', 12)
+    ylabel('Power conversion efficiency (%)', 'FontSize', 12)
+    legend('-dynamiclegend', 'Location', 'SouthEast')
+    set(gca, 'FontSize', 12)
        
     figure(3), hold on, box on
-    Cnum = S.problem.df*nlin.SEnum(n, :)/1e12;
+    Cnum = S.problem.df*nlin_sfn.SEnum(n, :)/1e12;
     fo = fitoptions('Method','NonlinearLeastSquares',...
                'Lower',[0,0,-Inf],...
                'Upper',[Inf,Inf, Inf],...
                'StartPoint',[1 1 0]);
     ft = fittype('a*log2(1 + b*x) + c','options',fo);
     Cfit = fit(pumpPowermW.', Cnum.', ft);
-    hplt = plot(pumpPowermW, Cnum, 'LineWidth', 2, 'DisplayName', sprintf('%d nm (numerical)', pumpWavelengthnm(n)));
+%     hplt = plot(pumpPowermW, Cnum, 'LineWidth', 2, 'DisplayName', sprintf('%d nm (numerical)', pumpWavelengthnm(n)));
     hplot(1) = plot(pumpPowermW, S.problem.df*lin.SEnum(n, :)/1e12, 'LineWidth', 2);
     hplot(2) = plot(pumpPowermW, S.problem.df*nlin.SEnum(n, :)/1e12, 'LineWidth', 2);
-    hplot(3) = plot(pumpPowermW, S.problem.df*nlin_unc.SEnum(n, :)/1e12, 'LineWidth', 2);
+    hplot(3) = plot(pumpPowermW, S.problem.df*nlin_sfn.SEnum(n, :)/1e12, 'LineWidth', 2);
 %     plot(pumpPowermW, S.problem.df*lin.SEnum(n, :)/1e12, '--', 'Color', get(hplot(1), 'Color'), 'LineWidth', 2);
 %     plot(pumpPowermW, S.problem.df*nlin.SEnum(n, :)/1e12, '--', 'Color', get(hplot(2), 'Color'), 'LineWidth', 2);
 %     plot(pumpPowermW, S.problem.df*nlin_unc.SEnum(n, :)/1e12, '--', 'Color', get(hplot(3), 'Color'), 'LineWidth', 2);
@@ -269,11 +282,13 @@ Po = 0.2; % power spent in other operations
 % %     plot(Ndim(idx), Copt, '*r')
 % end
 Po =  0:0.1:0.5;
+maxDim = 20;
 leg = {};
+Ppump = zeros(length(Po), maxDim);
 for p = 1:length(Po)
-    for s = 1:20
-        Ppump = max(0.4*(Ptot/(2*s*Nspans)-Po(p)), 0); % optical power per edfa assuming 1 spatial dimension
-        Cp(p, s) = s*Cfit(Ppump*1e3);
+    for s = 1:maxDim
+        Ppump(p, s) = max(0.4*(Ptot/(2*s*Nspans)-Po(p)), 0); % optical power per edfa assuming 1 spatial dimension
+        Cp(p, s) = s*Cfit(Ppump(p, s)*1e3);
     end
     leg = [leg sprintf('P_o = %.1f W', Po(p))];
 end
@@ -286,4 +301,12 @@ set(gca, 'FontSize', 12)
 xlabel('Spatial dimensions', 'FontSize', 12)
 ylabel('Capacity (Tb/s)', 'FontSize', 12)
 legend('-dynamiclegend')
-% xlim([30 1000])
+
+figure, hold on, box on
+plot(1:20, Ppump*1e3)
+legend(leg)
+set(gca, 'FontSize', 12)
+xlabel('Spatial dimensions', 'FontSize', 12)
+ylabel('Pump power (mW)', 'FontSize', 12)
+legend('-dynamiclegend')
+ylim([0 60])

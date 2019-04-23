@@ -3,6 +3,7 @@ classdef Channels
         wavelength % wavelength
         P % power
         direction % direction of propgation: {'forward', 'backward'}
+        df % frequency spacing
     end
     
     properties(Dependent)
@@ -49,6 +50,10 @@ classdef Channels
         function PdBm = get.PdBm(self)
             %% Power in dBm
             PdBm = 10*log10(self.P/1e-3);
+        end
+        
+        function obj = set.PdBm(obj, PdBm)
+            obj.P = dBm2Watt(PdBm);
         end
         
         function lnm = get.lnm(self)
