@@ -13,9 +13,7 @@ df = Rs;
 %       _______
 % j -> |channel| -> i
 
-%%
-PdBm = -33;
-
+PdBm = -50:-10;
 C = zeros(1,length(PdBm));
 
 m = 2000;
@@ -65,8 +63,8 @@ for k = 1:length(PdBm)
     C(k) = I(end)/log(2)*Rs;  
 end
 
-
-%%
+figure(3)
+plot(PdBm,C*1e-9)
 
 function j = J(P,p,phi)
     tmp = P.*log(phi);
