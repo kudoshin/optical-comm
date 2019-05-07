@@ -85,6 +85,8 @@ yyaxis right
 ylabel('shot/thermal noise ratio')
 ylim([0 10])
 legend('-dynamiclegend')
+grid on
+
 %% 2-PAM equations
 % ka = 0.1:0.02:1;
 % Mopt = sqrt((thermal./(Qreq*APD.q*Rs)+ka-1)./ka);
