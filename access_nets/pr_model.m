@@ -39,8 +39,8 @@ Nsplice = 3;
 % plot(10*log10(t),pdBsplice)
 Nconn1 = 3;
 Nconn2 = 1;
-meangauss = -Nconn1*0.3+Nconn2*0.5;
-pdBgauss = normpdf(-3:dt:2,meangauss,0.5);
+meangauss = -(Nconn1*0.3+Nconn2*0.5);
+pdBgauss = normpdf(-4:dt:1,meangauss,0.5);
 
 loss = 0.4; % dB/km
 meandist = 8; % km
@@ -56,7 +56,7 @@ end
 pdfTot = conv(pdfVar,pdistdB)*dt;
 cdfTot = cumsum(pdfTot)/sum(pdfTot);
 %%
-lossdB = -12:dt:2;
+lossdB = -12:dt:1;
 pdfVar = pdfVar(end-length(lossdB)+1:end);
 pdfTot = pdfTot(end-length(lossdB)+1:end);
 cdfTot = cdfTot(end-length(lossdB)+1:end);
@@ -77,5 +77,12 @@ xlim([-12 0])
 grid on
 legend('pdf','cdf')
 ylim([0 1])
+
 %%
-save prmodel lossdB pdfTot cdfTot pdfVar
+% lossvar = lossdB - sum(lossdB.*pdfVar).*dt;
+lossvar = lossdB - meangauss - Nsplice*0.1;
+figure(2)
+plot(lossvar,pdfVar)
+
+%%
+% save prmodel lossdB pdfTot cdfTot pdfVar lossvar Nsplice Nconn1 Nconn2 meandist
