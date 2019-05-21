@@ -20,7 +20,7 @@ plot(PrecdB,[pdf;rayleigh.*Prec*log(10)/10;gaussian]')
 
 %% splice loss + distance model
 dt = 0.0002;
-tdB = -6:dt:0;
+tdB = -10:dt:0;
 t = 10.^(tdB/10);
 alpha = 0.096;
 beta = 0.265;
@@ -35,32 +35,47 @@ psplice(r4) = 1./(2*t(r4)*alpha*beta).*atan(alpha./sqrt(-log(t(r4))-alpha^2));
 psplice(r5) = 1./(2*t(r5)*alpha*beta).*(atan(alpha./sqrt(-log(t(r5))-alpha^2))-acot(beta./sqrt(-log(t(r5))-beta^2)));
 % plot(t,psplice)
 pdBsplice = psplice.*t*log(10)/10;
+Nsplice = 3;
 % plot(10*log10(t),pdBsplice)
-pdBgauss = normpdf(-2:dt:2,0,0.5);
+Nconn1 = 3;
+Nconn2 = 1;
+meangauss = -Nconn1*0.3+Nconn2*0.5;
+pdBgauss = normpdf(-3:dt:2,meangauss,0.5);
 
-meandist = 4; % km
-s2 = meandist^2*2/pi; %km^2
-pdistdB = -4*tdB/s2.*exp(-4*tdB.^2/(2*s2));
+loss = 0.4; % dB/km
+meandist = 8; % km
+meanloss = meandist*loss; % dB
+s2 = meanloss^2*2/pi; %km^2
+pdistdB = -tdB/s2.*exp(-tdB.^2/(2*s2));
 % plot(tdB,pdistdB)
 
-pdfTot = conv(conv(conv(pdBsplice,pdBsplice),pdBsplice),conv(pdBgauss,pdistdB))*dt^4;
+pdfVar = pdBgauss;
+for i=1:Nsplice
+    pdfVar = conv(pdBsplice,pdfVar)*dt;
+end
+pdfTot = conv(pdfVar,pdistdB)*dt;
 cdfTot = cumsum(pdfTot)/sum(pdfTot);
-lossdB = -12:dt:0;
+%%
+lossdB = -12:dt:2;
+pdfVar = pdfVar(end-length(lossdB)+1:end);
 pdfTot = pdfTot(end-length(lossdB)+1:end);
 cdfTot = cdfTot(end-length(lossdB)+1:end);
 %%
 fig = figure(1);
 fig.Position = [0 550 560 260];
-set(0,'defaultaxesfontsize',16)
-set(0,'defaultaxesfontname','times new roman')
 yyaxis left
+% set(0,'defaultaxesfontsize',16)
+% set(0,'defaultaxesfontname','times new roman')
 h=plot(lossdB,pdfTot,'linewidth',1.5,'color','k');
-ylabel('pdf')
+% hold on
 yyaxis right
-plot(lossdB,cumsum(pdfTot)*dt,'linewidth',2)
-ylabel('cdf')
+plot(lossdB,cdfTot,'linewidth',2)
+hold off
 xlabel('Relative loss (dBm)')
-xlim([-10 0])
+xlim([-12 0])
 % ylim([0 1])
 grid on
-% save prmodel lossdB pdfTot cdfTot
+legend('pdf','cdf')
+ylim([0 1])
+%%
+save prmodel lossdB pdfTot cdfTot pdfVar
