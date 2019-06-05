@@ -9,122 +9,11 @@ HrxPshape = apd_system_received_pulse_shape(mpam, Tx, Fiber, Apd, Rx, sim); % th
 
 %% Modulated PAM signal
 % dataTX = [0 0 0 0 0 1 0 0 0 0 0];
-if mpam.M ~=3
-    dataTX= randi([0 mpam.M-1], 1, sim.Nsymb); % Random sequence
-else
-    dataTX = randi([0 7], 1, ceil(sim.Nsymb/2));
-end
+dataTX= randi([0 mpam.const_size-1], 1, sim.Nsymb/mpam.symdim); % Random sequence
 Nzero = 10;
 dataTX([1:Nzero/mpam.symdim end-Nzero/mpam.symdim+1:end]) = 0;
 
-if isfield(sim, 'precomp') && sim.precomp
-    mzmtf =@(v) sin(pi/2*v);
-    mzmitf =@(v) 2/pi*asin(v);
-    pmax = mzmtf(Tx.Mod.Vswing/2+Tx.Mod.Vbias)^2;
-    pmin = mzmtf(-Tx.Mod.Vswing/2+Tx.Mod.Vbias)^2;
-    mpampre = mpam.norm_levels();
-    mpampre = mpampre.set_levels(mpampre.a*(pmax-pmin)+pmin,...
-        mpampre.b*(pmax-pmin)+pmin);
-    x0 = mpampre.signal(dataTX);   % desired PAM signal
-%     % preemphasis for APD/ADC filtering
-%     Hpre = 1./Rx.ADC.filt.H(sim.f/sim.fs);
-%     Hpre(abs(sim.f)>18e9)=0;
-%     x1 = ifft(fft(x0).*ifftshift(Hpre)); 
-    x1=x0;
-    x2 = sqrt(x1);
-    % undo dispersion
-    Fiber.L = -Fiber.L;
-    x3 = Fiber.linear_propagation(x2,sim.f,Tx.Laser.wavelength);
-    Fiber.L = -Fiber.L;
-    % clip
-    x4=clip(x3,[0 1]);
-    % undo MZM nonlinearity
-    x5 = mzmitf(real(x4))+1j*mzmitf(imag(x4));
-    % preemphasis for DAC/MZM filtering
-    Hpre = 1./(Tx.DAC.filt.H(sim.f/sim.fs).*Tx.Mod.filt.H(sim.f/sim.fs));
-    Hpre(abs(sim.f)>50e9)=0;
-    xk = ifft(fft(x5).*ifftshift(Hpre));
-%     xk=x5;
-    xt = dac(real(xk),Tx.DAC,sim, sim.shouldPlot('DAC output')) + 1j*dac(imag(xk),Tx.DAC,sim);
-else
-    if isfield(sim, 'mzm_predistortion') && strcmpi(sim.mzm_predistortion, 'levels') %% Ordinary PAM with predistorted levels
-        assert(strcmp(Tx.Mod.type,'MZM'),'predistortion is set but modulator is not MZM')
-
-        % Ajust levels to desired transmitted power and extinction ratio
-        mpam=mpam.norm_levels;
-        mpamPredist = mpam.mzm_predistortion(Tx.Mod.Vswing, Tx.Mod.Vbias, sim.shouldPlot('PAM levels MZM predistortion'));
-        xk = mpamPredist.signal(dataTX); % Modulated PAM signal
-    else
-        mpam = mpam.adjust_levels(1,Tx.Mod.rexdB);
-        mpam = mpam.norm_levels;
-        xk = mpam.signal(dataTX); % Modulated PAM signal
-    end  
-
-    %% DAC
-    xt = dac(xk, Tx.DAC, sim, sim.shouldPlot('DAC output')); 
-end
-
-%% Generate optical signal
-Tx.Laser.PdBm = Watt2dBm(Tx.Ptx);
-Tx.Laser.H = @(f) Tx.Mod.filt.H(f/sim.fs);
-Ecw = Tx.Laser.cw(sim);
-if strcmp(Tx.Mod.type, 'MZM')
-    Etx = mzm(Ecw, xt, Tx.Mod.filt.H(sim.f/sim.fs)); % transmitted electric field
-    Etx = sqrt(2)*Etx;
-elseif strcmp(Tx.Mod.type, 'DML')
-    xt = xt - min(xt);
-    Etx = Tx.Laser.modulate(xt, sim);
-elseif strcmp(Tx.Mod.type, 'EAM')
-    if ~isa(Tx.Mod.H,'function_handle')
-        Tx.Mod.H =@(f) Tx.Mod.filt.H(f/sim.fs);
-    end
-    [Etx, ~] = eam(Ecw, 2*xt, Tx.Mod, sim.f);
-else
-    error('ber_apd_montecarlo: Invalid modulator type. Expecting Tx.Mod.type to be either MZM, EAM, or DML')
-end
-power = mean(abs(Etx.^2));
-%% Ensures that transmitted power is at the right level
-Padj = Tx.Ptx/power;
-Etx = Etx*sqrt(Padj);
-
-%% Fiber propagation
-Erx = Fiber.linear_propagation(Etx, sim.f, Tx.Laser.wavelength);
-
-%% Detect and add noises
-% yt = Apd.detect(Erx, sim.fs, 'no noise');
-yt = Apd.detect(Erx, sim.fs, 'gaussian', Rx.N0);
-
-%% Whitening filter
-if sim.WhiteningFilter
-    [~, yt] = Apd.Hwhitening(sim.f, mean(abs(Erx).^2), Rx.N0, yt);
-end
-
-%% Automatic gain control
-% Normalize signal so that highest level is equal to 1
-mpam = mpam.norm_levels;
-AGC = 1/(2*Padj*Tx.Ptx*Apd.Geff*Fiber.link_attenuation(Tx.Laser.wavelength));
-yt = yt*AGC;
-yt = yt - mean(yt) + mean(mpam.a);
-
-%% ADC
-% ADC performs filtering, quantization, and downsampling
-% For an ideal ADC, ADC.ENOB = Inf
-% Align received and transmitted signals
-% Rx.ADC.offset = 0;
-Rx.ADC.timeRefSignal = xt; % align filtered signal ytf to this reference
-switch lower(Rx.filtering)
-    case 'antialiasing' % receiver filter is specified in ADC.filt
-        [yk, ~, ytf] = adc(yt, Rx.ADC, sim);
-    case 'matched' % receiver filter is matched filter
-        Hrx = conj(HrxPshape);
-        [yk, ~, ytf] = adc(yt, Rx.ADC, sim, Hrx); % replace ADC antialiasing filter by matched filter
-    otherwise
-        error('ber_preamp_sys_montecarlo: Rx.filtering must be either antialiasing or matched')
-end     
-
-%% Equalization
-Rx.eq.trainSeq = dataTX;
-[yd, Rx.eq] = equalize(Rx.eq, yk, HrxPshape, mpam, sim);
+[~, yd, mpam] = transmit(dataTX, sim, Tx, Fiber, Apd, Rx, mpam, 'gaussian');   
 
 % Symbols to be discard in BER calculation
 ndiscard = [1:Rx.eq.Ndiscard(1)+sim.Ndiscard (sim.Nsymb-Rx.eq.Ndiscard(2)-sim.Ndiscard+1):sim.Nsymb];
@@ -133,11 +22,11 @@ yd(ndiscard) = [];
 dataTX(round(ndiscard(mpam.symdim:mpam.symdim:end)/mpam.symdim)) = [];
 
 %% Demodulate
-% if mpam.optimize_level_spacing
-%     dataRX = mpam.demod(yd);
-% else
+if mpam.optimize_level_spacing
+    dataRX = mpam.demod(yd);
+else
     [dataRX, mpam] = mpam.demod_sweeping_thresholds(yd, dataTX);
-% end
+end
 
 %% True BER
 [~, ber] = biterr(dataRX, dataTX);
@@ -233,5 +122,6 @@ if sim.shouldPlot('Conditional PDF')
         hold on
     end
     hold off
+%     vline(mpam.b,'b:')
     drawnow
 end

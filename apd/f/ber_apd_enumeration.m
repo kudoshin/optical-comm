@@ -1,4 +1,4 @@
-function [berenum, pe, distr] = ber_apd_enumeration(mpam, Tx, Fiber, Apd, Rx, sim)
+function [berenum, pe, distr, mpam] = ber_apd_enumeration(mpam, Tx, Fiber, Apd, Rx, sim)
 %% Calculate BER for unamplified IM-DD link with APD using enumeration method
 
 %% Pre calculations
@@ -16,9 +16,6 @@ end
 
 [sim.f, sim.t] = freq_time(N, sim.fs);
 
-% system frequency responses
-[HrxPshape, H] = apd_system_received_pulse_shape(mpam, Tx, Fiber, Apd, Rx, sim);
-
 
 %% Modulated PAM signal
 
@@ -32,106 +29,16 @@ if ~isfield(Tx.Mod,'type')
     Tx.Mod.type = 'EAM';
 end
 
-
-if isfield(sim, 'mzm_predistortion') && strcmpi(sim.mzm_predistortion, 'levels') %% Ordinary PAM with predistorted levels
-    assert(strcmp(Tx.Mod.type,'MZM'),'predistortion is set but modulator is not MZM')
-    mpam = mpam.norm_levels;
-    mpamPredist = mpam.mzm_predistortion(Tx.Mod.Vswing, Tx.Mod.Vbias, sim.shouldPlot('PAM levels MZM predistortion'));
-    xk = mpamPredist.signal(dataTXext); % Modulated PAM signal
-else
-    % Ajust levels to desired extinction ratio
-    mpam = mpam.adjust_levels(1,Tx.Mod.rexdB); 
-    mpam = mpam.norm_levels;
-    xk = mpam.signal(dataTXext); % Modulated PAM signal
-end  
-
-%% ============================ Preemphasis ===============================
-if isfield(sim, 'preemphasis') && sim.preemphasis
-    femph = abs(freq_time(sim.Nsymb*sim.ros.txDSP, mpam.Rs*sim.ros.txDSP));
-    femph(femph >= sim.preemphRange) = 0;
-    preemphasis_filter = 10.^(polyval([-0.0013 0.5846 0], femph/1e9)/20);  % Coefficients were measured in the lab  
-
-    xk = real(ifft(fft(xk).*ifftshift(preemphasis_filter)));
-end
-
-%% Predistortion to compensate for MZM non-linear response
-% This predistorts the analog waveform. If sim.mzm_predistortion ==
-% 'levels', then only the levels are predistorted, which is more realistic
-if isfield(sim, 'mzm_predistortion') && strcmpi(sim.mzm_predistortion, 'analog')    
-    xk = 2/pi*asin(sqrt(abs(xk))).*sign(xk); % apply predistortion
-end
-
-%% DAC
-xt = dac(xk, Tx.DAC, sim); 
-
-%% Driver
-% Adjust gain to compensate for preemphasis
-xt = Tx.Vgain*(xt - mean(xt)) + Tx.VbiasAdj*mean(xt);
-
-%% Generate optical signal
-if ~isfield(sim, 'RIN')
-    sim.RIN = false;
-end
-
-RIN = sim.RIN;
-sim.RIN = false; % RIN is not modeled here since number of samples is not high enough to get accurate statistics
-sim.phase_noise = false; 
-Tx.Laser.PdBm = Watt2dBm(Tx.Ptx);
-Ecw = Tx.Laser.cw(sim);
-sim.RIN = RIN;
-
-% Modulate
-if strcmp(Tx.Mod.type, 'MZM')
-    Etx = mzm(Ecw, xt, Tx.Mod.filt.H(sim.f/sim.fs)); % transmitted electric field
-    Etx = sqrt(2)*Etx;
-elseif strcmp(Tx.Mod.type, 'DML')
-    xt = xt - min(xt);
-    Etx = Tx.Laser.modulate(xt, sim);
-else
-    if ~isa(Tx.Mod.H,'function_handle')
-        Tx.Mod.H =@(f) Tx.Mod.filt.H(f/sim.fs);
-    end
-    [Etx, ~] = eam(Ecw, 2*xt, Tx.Mod, sim.f);
-end
-
-% Ensures that transmitted power is at the right level
-Padj = Tx.Ptx/mean(abs(Etx).^2);
-Etx = Etx*sqrt(Padj);
-
-%% Fiber propagation
-Erx = Fiber.linear_propagation(Etx, sim.f, Tx.Laser.wavelength);
-
-%% Direct detect
-yt = Apd.detect(Erx, sim.fs, 'no noise');
-
-%% Noise whitening filter
-if sim.WhiteningFilter
-    [~, yt] = Apd.Hwhitening(sim.f, mean(abs(Erx).^2), Rx.N0, yt);
-end
-
-%% Automatic gain control
-mpam = mpam.norm_levels;
-AGC = 1/(2*Padj*Tx.Ptx*Rx.PD.Geff*Fiber.link_attenuation(Tx.Laser.wavelength));
-yt = yt*AGC;
-yt = yt - mean(yt) + mean(mpam.a);
-
-%% ADC
-% ADC performs filtering, quantization, and downsampling
-% For an ideal ADC, ADC.ENOB = Inf 
-Rx.ADC.timeRefSignal = xt; % align filtered signal ytf to this reference
-if ~strcmpi(Rx.eq.type, 'none')
-    [yk, ~, ~] = adc(yt, Rx.ADC, sim, conj(HrxPshape));
-else
-    [yk, ~, ~] = adc(yt, Rx.ADC, sim);        
-end
-
-%% Equalization
-[yd, Rx.eq] = equalize(Rx.eq, yk, HrxPshape, mpam, sim);
+[Erx, yd, mpam, Rx] = transmit(dataTXext, sim, Tx, Fiber, Apd, Rx, mpam, 'no noise');
 
 % Symbols to be discard in BER calculation
 yd = yd(sim.Ndiscard+1:end-sim.Ndiscard);
 
 %% Calculate signal-dependent noise variance after matched filtering and equalizer 
+
+% system frequency responses
+[~, H] = apd_system_received_pulse_shape(mpam, Tx, Fiber, Apd, Rx, sim);
+
 Ssh = Apd.varShot(abs(Erx).^2, 1)/2; % two-sided shot noise PSD
 
 % Receiver filter
@@ -156,7 +63,7 @@ Sshf = Sshf + Rx.N0/2*BWthermal;
 
 % Normalize and sample
 Sshd = Sshf(1:sim.Mct:end);
-Sshd = (AGC)^2*Sshd(sim.Ndiscard+1:end-sim.Ndiscard);
+Sshd = (Rx.AGC)^2*Sshd(sim.Ndiscard+1:end-sim.Ndiscard);
 
 %% Calculate error probabilities using Gaussian approximation for each transmitted symbol
 % if not(mpam.optimize_level_spacing) && isfield(sim, 'mpamOpt') && not(isempty(sim.mpamOpt)) % use threshlds swept in montecarlo simulation

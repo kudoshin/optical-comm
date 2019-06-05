@@ -7,13 +7,13 @@ classdef PAM
         pulse_shape % struct containing the following fields {type: {'rectangular', 'root raised cosine', 'raised cosine'}, h: pulse shape impulse response i.e., coefficients of FIR filter,sbs: samples per symbol, and other parameters such as rolloff factor, etc}
         a % levels
         b % decision threshold
-        const_size  % number of PAM dimensions per symbol
+        const_size  
+        symdim % number of PAM dimensions per symbol
     end
     
     properties (Dependent)
         Rs % symbol rate
         optimize_level_spacing % logical variable
-        symdim
     end
     
     properties (GetAccess=private)
@@ -24,7 +24,7 @@ classdef PAM
     end
        
     methods
-        function obj = PAM(M, Rb, level_spacing, pulse_shape, const_size)
+        function obj = PAM(M, Rb, level_spacing, pulse_shape)
             %% Class constructor
             % Inputs
             % - M = constellation size
@@ -55,8 +55,10 @@ classdef PAM
             
             if M == 3
                 obj.const_size = 8;
+                obj.symdim = 2;
             else
                 obj.const_size = M;
+                obj.symdim = 1;
             end
             
             obj = obj.reset_levels();
@@ -78,16 +80,16 @@ classdef PAM
         %% Get and set methods
         function Rs = get.Rs(self)
             %% Symbol-rate assuming rectangular pulse
-            Rs = self.Rb/log2(self.M);
+            if self.M ~= 3
+                Rs = self.Rb/log2(self.M);
+            else
+                Rs = self.Rb/1.5;
+            end
         end
         
         function optimize_level_spacing = get.optimize_level_spacing(self)
             %% True if level_spacing == 'optimized'
             optimize_level_spacing = strcmp(self.level_spacing, 'optimized');
-        end
-        
-        function symdim = get.symdim(self)
-            symdim = ceil(log(self.const_size)/log(self.M));
         end
         
         function H = Hpshape(self, f)
@@ -215,12 +217,12 @@ classdef PAM
             %% Given conditional probability distribution function, find threshold positions
             thresh = zeros(self.M-1,1);
             for k=1:self.M-1
-                try
+%                 try
                 [t, ~, exitflag] = fzero(@(t) 1 - distr.tailpr(t,k) - ...
                     distr.tailpr(t,k+1),[distr.mean(k),distr.mean(k+1)]);
-                catch
-                    self.a                    
-                end
+%                 catch
+%                     self.a                    
+%                 end
                 if exitflag ~= 1
                     warning('PAM/optimize_thresholds: threshold optimization exited with exit flag %d',exitflag)
                 end
@@ -419,8 +421,8 @@ classdef PAM
             % - berk = ber of the kth level. self actually corresponds to 
             % bertail_levels = p(error | given symbol)p(symbol)
           
-            ser = zeros(1, self.const_size);
-            if self.symdim == 1
+            ser = zeros(1, self.M);
+            if self.M == self.const_size
                 for k = 1:self.M
                     if k == 1
                         ser(k) = ser(k) + qfunc((self.b(1) - self.a(1))/noise_std(self.a(1)));

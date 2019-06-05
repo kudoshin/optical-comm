@@ -1,7 +1,8 @@
 %% Precalculated De Bruijn sequence with subsequence length n for the alphabet = {0, 1, ..., M-1}
-% Sequences were calculated using Mathematica: DeBruijnSequence[a, n]
+% Sequences were calculated using Mathematica: DeBruijnSequence[a, n] and
+% python script
 % M = 2, 4, 8, or 16
-% n = 1, 2, 3, 4, 5
+% n = 1, 2, 3, 4, 5, 6, 7
 function sequence = debruijn_sequence(M, n)
 
 try 
@@ -478,6 +479,14 @@ try
                 2, 0, 0, 2, 2, 1, 3, 0, 2, 2, 1, 2, 0, 2, 2, 1, 1, 0, 2, 2, 2, 3, 0, 2, 2,...
                 2, 2, 3, 3, 2, 2, 2, 3, 2, 3, 2, 2, 3, 2, 2, 2, 2, 2, 0, 2, 2, 2, 1, 0, 2,...
                 2];
+        case 6
+            sequence2 = [0,0,0,0,0,0,1,0,0,0,0,1,1,0,0,0,1,0,1,0,0,0,1,...
+                1,1,0,0,1,0,0,1,0,1,1,0,0,1,1,0,1,0,0,1,1,1,1,0,1,0,1,...
+                0,1,1,1,0,1,1,0,1,1,1,1,1,1];
+            sequence4 = csvread('debruijn4,6.csv');
+        case 7
+            sequence2 = csvread('debruijn2,7.csv');
+            sequence4 = csvread('debruijn4,7.csv');
     end
     
     switch M
