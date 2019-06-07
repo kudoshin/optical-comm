@@ -29,6 +29,7 @@ elseif mpam.optimize_level_spacing  %% Level Spacing Optimization
     sim.quantiz = false;
     [ber.preq, mpam] = Apd.optimize_PAM_levels(Apd.Gain, mpam, Tx, Fiber, Rx, sim);
     sim.quantiz=temp;
+    fprintf('G = %.1f dB, Preq = %.3f dBm\n',Apd.GaindB, 10*log10(ber.preq*1e3));
 end
 mpam = mpam.norm_levels();
 
@@ -40,21 +41,23 @@ ber.count = zeros(size(Ptx)); % counted BER
 ber.enum = zeros(size(Ptx)); % analysis assuming Gaussian stats
 ber.awgn = zeros(size(Ptx)); % AWGN approximation (includes noise enhancement penalty)
 ber.pe = zeros(length(Ptx),mpam.const_size); % crossover probabilities from enumeration
-run_montecarlo = true;
+run_montecarlo = false;
 for k = 1:length(Ptx)
     Tx.Ptx = Ptx(k);
             
     % BER using Gaussian stats approximation for shot noise (enumeration)
-    [ber.enum(k),ber.pe(k,:)] = ber_apd_enumeration(mpam, Tx, Fiber, Apd, Rx, sim);
+    [ber.enum(k),ber.pe(k,:),~,mpam] = ber_apd_enumeration(mpam, Tx, Fiber, Apd, Rx, sim);
     
     % Montecarlo simulation
     if run_montecarlo
         hold on
-        [ber.count(k), ~] = ber_apd_montecarlo(mpam, Tx, Fiber, Apd, Rx, sim);
+        [ber.count(k),~] = ber_apd_montecarlo(mpam, Tx, Fiber, Apd, Rx, sim);
     end
     
     % BER using AWGN system approximation including noise enhacement
-    ber.awgn(k) = ber_apd_awgn(mpam, Tx, Fiber, Apd, Rx, sim);
+%     if ~strcmp(Rx.eq.type,'none')
+%         ber.awgn(k) = ber_apd_awgn(mpam, Tx, Fiber, Apd, Rx, sim);
+%     end
     
     if isfield(sim, 'terminateWhenBERReaches0') && sim.terminateWhenBERReaches0 && ber.count(k) == 0
         run_montecarlo = false;
@@ -75,6 +78,7 @@ if sim.shouldPlot('BER') && length(ber.count) > 1
     ylabel('log_{10}(BER)')
     grid on
     axis([Tx.PtxdBm(1) Tx.PtxdBm(end) -8 0])  
+    hold off
     drawnow
 end
 

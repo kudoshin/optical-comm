@@ -63,38 +63,6 @@ if sim.shouldPlot('Equalizer')
     drawnow
 end
 
-if sim.shouldPlot('Optical eye diagram')  
-    Ntraces = 500;
-    Nstart = sim.Ndiscard*sim.Mct + 1;
-    Nend = min(Nstart + Ntraces*2*sim.Mct, length(Etx));
-    figure(103), clf, box on
-    eyediagram(abs(Etx(Nstart:Nend)).^2, 2*sim.Mct)
-    title('Optical eye diagram')
-    drawnow
-end
-
-if sim.shouldPlot('Received signal eye diagram')
-    Ntraces = 500;
-    Nstart = sim.Ndiscard*sim.Mct + 1;
-    Nend = min(Nstart + Ntraces*2*sim.Mct, length(Erx));
-    figure(104), clf, box on
-    eyediagram(abs(Erx(Nstart:Nend)).^2, 2*sim.Mct)
-    title('Received optical eye diagram (before noise)')
-    mpam = mpam.norm_levels();
-    Ntraces = 500;
-    Nstart = sim.Ndiscard*sim.Mct + 1;
-    Nend = min(Nstart + Ntraces*2*sim.Mct, length(ytf));
-    figure(105), clf, box on, hold on
-    eyediagram(ytf(Nstart:Nend), 2*sim.Mct)
-    title('Received signal eye diagram')
-    a = axis;
-    h1 = plot(a(1:2), mpam.a*[1 1], '-k');
-    h2 = plot(a(1:2), mpam.b*[1 1], '--k');
-    h3 = plot((sim.Mct+1)*[1 1], a(3:4), 'k');
-    legend([h1(1) h2(1) h3], {'Levels', 'Decision thresholds', 'Sampling point'})
-    drawnow
-end
-
 if sim.shouldPlot('Signal after equalization')
     mpam = mpam.norm_levels();
     figure(106), clf, box on, hold on

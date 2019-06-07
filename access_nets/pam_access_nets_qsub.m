@@ -1,6 +1,6 @@
 function [ber, sim, mpam, Tx, Fibers, Rx] = ...
 pam_access_nets_qsub(RsGbd, M, fiberLengthKm, wavelengthnm, ModBWGHz, modulator, ...
-levels, amplified, gain, RecBWGHz, equalization, BERtarget, fc)
+levels, amplified, gain, RecBWGHz, equalization, BERtarget, fc, auto)
 %% Calculate BER of IM-DD system using M-PAM
 % - Equalization is done using a fractionally spaced linear equalizer
 % Simulations include modulator, fiber, optical amplifier (optional) characterized 
@@ -13,7 +13,7 @@ switch(M)
         Tx.PtxdBm = -35:-25; % transmitter power range
 %         Tx.PtxdBm = -35:-20;
     case 4
-        Tx.PtxdBm = -30:-20;
+        Tx.PtxdBm = -30:-15;
     case 8
 %         Tx.PtxdBm = -15:-5;
         Tx.PtxdBm = -25:-5;
@@ -21,39 +21,106 @@ switch(M)
     case 3
         Tx.PtxdBm = -30:-20;
 end
+% Tx.PtxdBm = -15;
 Tx.PtxdBm = reshape(Tx.PtxdBm,[],1);
 % Tx.PtxdBm = -22.5;
 %% Simulation parameters
 if M~=3
     sim.Rb = RsGbd*1e9*log2(M);    % bit rate in bits/sec
 else
-    sim.Rb = RsGdb*1e9*1.5;
+    sim.Rb = RsGbd*1e9*1.5;
 end
 sim.Nsymb = 2^17; % Number of symbols in montecarlo simulation
-sim.ros.txDSP = 1; % oversampling ratio transmitter DSP (must be integer). DAC samping rate is sim.ros.txDSP*mpam.Rs
 % For DACless simulation must make Tx.dsp.ros = sim.Mct and DAC.resolution = Inf
 sim.ros.rxDSP = 1; % oversampling ratio of receiver DSP. If equalization type is fixed time-domain equalizer, then ros = 1
-sim.Mct = 2*5;      % Oversampling ratio to simulate continuous time. Must be integer multiple of sim.ros.txDSP and numerator of sim.ros.rxDSP
+sim.Mct = 24;      % Oversampling ratio to simulate continuous time. Must be integer multiple of sim.ros.txDSP and numerator of sim.ros.rxDSP
 sim.BERtarget = BERtarget;
 sim.Ndiscard = 512; % number of symbols to be discarded from the begning and end of the sequence
 sim.N = sim.Mct*sim.Nsymb; % number points in 'continuous-time' simulation
 sim.Modulator = modulator; % 'MZM' or 'DML' or 'EAM'
-sim.L = 4; % de Bruijin sub-sequence length (ISI symbol length)
+if M~=3
+    sim.L = 6; % de Bruijin sub-sequence length (ISI symbol length)
+else
+    sim.L = 4;
+end
+if strcmp(equalization, 'precomp')
+    sim.ros.txDSP = 2; % oversampling ratio transmitter DSP (must be integer). DAC samping rate is sim.ros.txDSP*mpam.Rs
+    sim.preemphasis = true;
+    sim.preemphRange = 27e9;
+    if strcmp(sim.Modulator,'MZM')
+        sim.mzm_predistortion = 'analog'; % predistortion to compensate MZM nonlinearity {'none': no predistortion, 'levels': only PAM levels are predistorted, 'analog': analog waveform is predistorted (DEPRECATED)}
+    else
+        sim.mzm_predistortion = 'none';
+    end
+    sim.CDeq = true;
+    posteq = 'none';
+else
+    sim.preemphasis = false;
+    sim.ros.txDSP = 1;
+    posteq = equalization;
+    if strcmp(sim.Modulator,'MZM')
+        sim.mzm_predistortion = 'levels'; % predistortion to compensate MZM nonlinearity {'none': no predistortion, 'levels': only PAM levels are predistorted, 'analog': analog waveform is predistorted (DEPRECATED)}
+    else
+        sim.mzm_predistortion = 'none';
+    end
+end
+sim.posteq = ~strcmp(posteq,'none');
 
-sim.save = true;
+sim.save = false;
  
+if sim.save
+    params.lamb = wavelengthnm;
+    
+    params.RsGbd = RsGbd;
+    params.ModBWGHz = ModBWGHz;
+    params.RecBWGHz = RecBWGHz;
+    params.Lkm = fiberLengthKm;
+    params.modulator = modulator;
+    amp = {'pin','soa','apd'};
+    params.amp = amp{amplified+1};
+    params.levels = levels;
+    params.equalization = equalization;
+    if exist('fc','var')
+    params.fc = fc;
+    end
+    folder = 'C:/Users/Elaine/Documents/MATLAB/optical-comm/access_nets/results/precomp/';
+    subfolder = sprintf('%dGbd/%dPAM/',RsGbd,M);
+    if ~exist([folder subfolder],'dir')
+        mkdir([folder subfolder])
+    end
+    filename = name(params,M,gain,BERtarget);
+    if exist([folder filename],'file')
+        if exist('auto','var') && auto
+            fprintf('simulation data file %s already exists, skipping\n',filename);
+            ret = true;
+        else
+            cont = input(sprintf('simulation data file %s already exists, rerun? (y/r/[n]): ',filename),'s');
+            switch cont
+                case 'y'  % new file name
+                    filename = check_filename([folder filename]);
+                    ret = false;
+                case 'r' % rewrite old file
+                    filename = [folder filename];
+                    ret = false;
+                otherwise
+                    ret = true;
+            end
+        end
+        if ret
+            load([folder filename],'ber')
+            return
+        end
+    else
+        filename = [folder filename];
+    end
+    disp(filename(length(folder)+1:end))
+end
+
 %% Simulation control
 sim.preAmp = amplified==1;        % optical amplifier
 sim.Apd = amplified==2;
-sim.WhiteningFilter = true;
+sim.WhiteningFilter = ~sim.preemphasis;
 sim.OptimizeGain = false;
-sim.preemphasis = false; % preemphasis to compensate for transmitter bandwidth limitation
-sim.preemphRange = 25e9; % preemphasis range
-if strcmp(sim.Modulator,'MZM')
-    sim.mzm_predistortion = 'levels'; % predistortion to compensate MZM nonlinearity {'none': no predistortion, 'levels': only PAM levels are predistorted, 'analog': analog waveform is predistorted (DEPRECATED)}
-else
-    sim.mzm_predistortion = 'none';
-end
 sim.RIN = true; % include RIN noise in montecarlo simulation
 sim.phase_noise = true; % whether to simulate laser phase noise
 sim.PMD = false; % whether to simulate PMD
@@ -64,11 +131,12 @@ sim.terminateWhenBERReaches0 = true; % stop simulation when counted BER reaches 
 sim.Plots = containers.Map();
 sim.Plots('BER') = 1;
 sim.Plots('DAC output') = 0;
-sim.Plots('Optical eye diagram') = 1;
-sim.Plots('Received signal eye diagram') = 1;
-sim.Plots('Signal after equalization') = 1;
-sim.Plots('Equalizer') = 1;
-sim.Plots('Electronic predistortion') = 0;
+% if ~sim.posteq
+%     sim.Plots('Optical eye diagram') = 1;
+%     sim.Plots('Received signal eye diagram') = 1;
+% end
+sim.Plots('Signal after equalization') = 0;
+sim.Plots('Equalizer') = 0;
 sim.Plots('Adaptation MSE') = 0;
 sim.Plots('Channel frequency response') = 0;
 sim.Plots('OSNR') = 0;
@@ -96,9 +164,15 @@ sim.fs = mpam.Rs*sim.Mct;  % sampling frequency in 'continuous-time'
 %% DAC
 Tx.DAC.fs = sim.ros.txDSP*mpam.Rs; % DAC sampling rate
 Tx.DAC.ros = sim.ros.txDSP; % oversampling ratio of transmitter DSP
-Tx.DAC.resolution = Inf; % DAC effective resolution in bits
-Tx.DAC.rclip = 0;
-Tx.DAC.filt = design_filter('bessel', 5, 0.7*mpam.Rs/(sim.fs/2)); % DAC analog frequency response
+Tx.DAC.offset = sim.Mct*(1-1/sim.ros.txDSP)/2;
+if sim.preemphasis
+    Tx.DAC.resolution = 5; % DAC effective resolution in bits
+    Tx.DAC.rclip = 0;
+else
+    Tx.DAC.resolution = Inf;
+    Tx.DAC.rclip = 0;
+end
+Tx.DAC.filt = design_filter('bessel', 5, 0.7*Tx.DAC.fs/(sim.fs/2)); % DAC analog frequency response
 % juniperDACfit = [-0.0013 0.5846 0];
 % Tx.DAC.filt.H = @(f) 1./(10.^(polyval(juniperDACfit, abs(f*sim.fs/1e9))/20)); % DAC analog frequency response
 
@@ -159,6 +233,7 @@ if sim.Apd
     % APD
     % apd(GaindB, ka, BW, R, Id)
     Rx.PD = apd(gain, 0.15, [RecBWGHz*1e9 300e9] , 0.7, 10e-9);
+%     Rx.PD = apd(gain, 0.15, RecBWGHz*1e9 , 0.7, 10e-9);
 else
     % PIN3
     % pin(R, Id, BW)
@@ -170,39 +245,40 @@ end
 Rx.N0 = (30e-12).^2; 
 
 %% Receiver DSP
-if strcmp(equalization,'none')
-    Rx.filtering = 'antialiasing';
-else
+if sim.posteq
     Rx.filtering = 'matched'; % {'antialiasing' or 'matched'}
+else
+    Rx.filtering = 'antialiasing';
 end
 
 %% ADC for direct detection case
-if strcmp(equalization,'none')
-    assert(sim.ros.rxDSP==1,'no oversampling without equalization')
-    Rx.ADC.fs = mpam.Rs;
-    Rx.ADC.ros = 1;
-    % increase filter cutoff from antialiasing filter
-    Rx.ADC.filt = design_filter('bessel', 5, fc*Rx.ADC.fs/(sim.fs/2));
-    Rx.ADC.ENOB = Inf;
-    Rx.ADC.rclip = 0;
-else
+if sim.posteq
     Rx.ADC.fs = sim.ros.rxDSP*mpam.Rs;
     Rx.ADC.ros = sim.ros.rxDSP;
     Rx.ADC.filt = design_filter('butter', 5, (Rx.ADC.fs/2)/(sim.fs/2)); % Antialiasing filter
     Rx.ADC.ENOB = 5; % effective number of bits. Quantization is only included if quantiz = true and ENOB ~= Inf
+    Rx.ADC.rclip = 0;
+else
+    assert(sim.ros.rxDSP==1,'no oversampling without equalization')
+    Rx.ADC.fs = mpam.Rs;
+    Rx.ADC.ros = 1;
+    % increase filter cutoff from antialiasing filter
+    Rx.ADC.fc = fc;
+    Rx.ADC.filt = design_filter('bessel', 5, fc*Rx.ADC.fs/(sim.fs/2));
+    Rx.ADC.ENOB = Inf;
     Rx.ADC.rclip = 0;
 end
 
 %% Equalizer
 % Terminology: TD = time domain, SR = symbol-rate, LE = linear equalizer
 Ndiscarded = 2*sim.Ndiscard;
-if strcmp(equalization,'none')
+if strcmp(posteq,'none')
     Rx.eq.ros = 1;
     Rx.eq.type = 'none';
     Rx.eq.Ndiscard = [0 0];
 else
     Rx.eq.ros = sim.ros.rxDSP;
-    Rx.eq.type = equalization; %'fixed td-sr-le' or 'adaptive td-le' or 'none'
+    Rx.eq.type = posteq; %'fixed td-sr-le' or 'adaptive td-le' or 'none'
     Rx.eq.Ntaps = 15; % number of taps
     Rx.eq.mu = 1e-3; % adaptation ratio
     Rx.eq.Ntrain = 2e4; % Number of symbols used in training (if Inf all symbols are used)
@@ -278,34 +354,11 @@ ber.PrxdBm = PrxdBm;
 
 %% save results
 if sim.save
-    try
-        amp = {'pin','soa','apd'};
-%         folder = sprintf('./results/%dGbd/%dPAM/BW=%dGHz/amp=%s/',...
-%             RsGbd,mpam.M, Rx.PD.BW*1e-9,amp{sim.preAmp+2*sim.Apd+1});
-        folder = sprintf('./results/%sGbd/%dPAM/',num2str(RsGbd),mpam.M);
-        if ~exist(folder,'dir')
-            mkdir(folder)
-        end
-        if strcmp(equalization,'none')
-            filename = sprintf(['PAM_BER_TxBW=%dGHz_RxBW=%dGHz%s_%s_lev=%s_'...
-            'amp=%s_G=%sdB_eq=%s_BER=%.2e_L=%dkm.mat'], ...
-            ModBWGHz, RecBWGHz, num2str(fc), modulator, levels, ...
-            amp{amplified+1},num2str(gain),equalization,BERtarget,fiberLengthKm);
-        else
-            filename = sprintf(['PAM_BER_TxBW=%dGHz_RxBW=%dGHz_%s_lev=%s_'...
-                'amp=%s_G=%sdB_eq=%s_BER=%.2e_L=%dkm.mat'], ...
-                ModBWGHz, RecBWGHz, modulator, levels, ...
-                amp{amplified+1},num2str(gain),equalization,BERtarget,fiberLengthKm);
-        end
-        strrep(filename,' ','-');       % replace spaces
-        
-        filename = check_filename([folder filename])
-        
         % delete large variables
         sim = rmfield(sim, 'f');
         sim = rmfield(sim, 't');
         Tx.Mod = rmfield(Tx.Mod, 'H');    
-
+    try
         save(filename, 'sim','mpam','Tx','Fibers','Rx','ber','PrxdBm');
     catch
         warning('error saving file, saving to temp.mat')

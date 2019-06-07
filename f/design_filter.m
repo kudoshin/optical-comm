@@ -143,7 +143,7 @@ switch type
         % Note 2: The wo parameter in Bessel filter design is the frequency 
         % up to which the filter's group delay is approximately constant.
         % Factor of wc2wo converts fcnorm frequency into wo. 
-        wc2wo = 1.621597623980423; 
+        wc2wo = [1 1.272 1.405 1.515 1.621597623980423]; 
         % Note: wc2w0 was calculated using the following procedure:
         % function h = calc_besself_fcnorm(order, f3dB, wc2wo)
         % 
@@ -157,7 +157,7 @@ switch type
         % fzero(@(x) calc_besself_fcnorm(5, 1, x) - 0.5, 1.65)
         % The value of x doens't depend on f3dB
 
-        wow = wc2wo*(2*pi*fcnorm/2);
+        wow = wc2wo(order)*(2*pi*fcnorm/2);
         [nums, dens] = besself(order, wow); % design prototype in CT with frequency prewarped           
 %         [num, den] = bilinear(nums, dens, 1, fcnorm/2);
         [num, den] = impinvar(nums, dens, 1);

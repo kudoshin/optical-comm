@@ -1,4 +1,4 @@
-function [berenum, pe, distr, mpam] = ber_apd_enumeration(mpam, Tx, Fiber, Apd, Rx, sim)
+function [berenum, pe, distr, mpam] = ber_apd_enumeration(mpam, Tx, Fiber, Apd, Rx, sim, silent)
 %% Calculate BER for unamplified IM-DD link with APD using enumeration method
 
 %% Pre calculations
@@ -29,7 +29,10 @@ if ~isfield(Tx.Mod,'type')
     Tx.Mod.type = 'EAM';
 end
 
-[Erx, yd, mpam, Rx] = transmit(dataTXext, sim, Tx, Fiber, Apd, Rx, mpam, 'no noise');
+if ~exist('silent','var')
+    silent = 0;
+end
+[Erx, yd, mpam, Rx] = transmit(dataTXext, sim, Tx, Fiber, Apd, Rx, mpam, 'no noise', silent);
 
 % Symbols to be discard in BER calculation
 yd = yd(sim.Ndiscard+1:end-sim.Ndiscard);
@@ -155,3 +158,4 @@ if sim.shouldPlot('Conditional PDF')
     title(num2str(berenum,'BER = %.2e'))
     drawnow
 end
+
