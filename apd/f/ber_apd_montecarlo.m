@@ -1,41 +1,42 @@
-function [ber, mpam] = ber_apd_montecarlo(mpam, Tx, Fiber, Apd, Rx, sim)
+function [ber, dataTX, Etx] = ber_apd_montecarlo(mpam, Tx, Fiber, Apd, Rx, sim, dataTX, Etx)
 %% Calculate BER of unamplified IM-DD system with APD detector using montecarlo simulation
-
-% System received pulse shape frequency response
-HrxPshape = apd_system_received_pulse_shape(mpam, Tx, Fiber, Apd, Rx, sim); % this is only used if rx.filtering = matched or eq.type = fixed...
 
 % Ajust levels to desired transmitted power and extinction ratio
 % mpam = mpam.adjust_levels(Tx.Ptx, Tx.Mod.rexdB);
 
-%% Modulated PAM signal
-% dataTX = [0 0 0 0 0 1 0 0 0 0 0];
-dataTX= randi([0 mpam.const_size-1], 1, sim.Nsymb/mpam.symdim); % Random sequence
-Nzero = 10;
-dataTX([1:Nzero/mpam.symdim end-Nzero/mpam.symdim+1:end]) = 0;
+if ~exist('dataTX','var') || isempty(dataTX)
+    %% Modulated PAM signal
+    % dataTX = [0 0 0 0 0 1 0 0 0 0 0];
+    dataTX= randi([0 mpam.const_size-1], 1, sim.Nsymb/mpam.symdim); % Random sequence
+    Nzero = 10;
+    dataTX([1:Nzero/mpam.symdim end-Nzero/mpam.symdim+1:end]) = 0;
 
-[~, yd, mpam] = transmit(dataTX, sim, Tx, Fiber, Apd, Rx, mpam, 'gaussian');   
+    Etx = transmit(dataTX, sim, Tx, Fiber, Apd, Rx, mpam);
+end
+[~, yd, Rx] = receive(dataTX, sim, Tx, Fiber, Apd, Rx, mpam, Etx,'gaussian');  
 
 % Symbols to be discard in BER calculation
+dataTXcut = dataTX;
 ndiscard = [1:Rx.eq.Ndiscard(1)+sim.Ndiscard (sim.Nsymb-Rx.eq.Ndiscard(2)-sim.Ndiscard+1):sim.Nsymb];
 ydfull = yd;
 yd(ndiscard) = []; 
-dataTX(round(ndiscard(mpam.symdim:mpam.symdim:end)/mpam.symdim)) = [];
+dataTXcut(round(ndiscard(mpam.symdim:mpam.symdim:end)/mpam.symdim)) = [];
 
 %% Demodulate
 if mpam.optimize_level_spacing
     dataRX = mpam.demod(yd);
 else
-    [dataRX, mpam] = mpam.demod_sweeping_thresholds(yd, dataTX);
+    [dataRX, mpam] = mpam.demod_sweeping_thresholds(yd, dataTXcut);
 end
 
 %% True BER
-[~, ber] = biterr(dataRX, dataTX);
+[~, ber] = biterr(dataRX, dataTXcut);
 
 %% Plots
 if sim.shouldPlot('Empirical noise pdf')
     % Empirical pdf for a level
     figure(100)
-    [nn, xx] = hist(yd(dataTX == 2), 50);
+    [nn, xx] = hist(yd(dataTXcut == 2), 50);
     nn = nn/trapz(xx, nn);
     bar(xx, nn)
     title('Empirical pdf for PAM level 2')
@@ -82,7 +83,7 @@ end
 if sim.shouldPlot('Conditional PDF')
     figure(110)
     set(gca,'colororderindex',1)
-    isort = mpam.map(dataTX)==(1:mpam.M)'-1;
+    isort = mpam.map(dataTXcut)==(1:mpam.M)'-1;
     for m=1:mpam.M
         [nn, xx] = hist(yd(isort(m,:)), 50);
         nn = nn/trapz(xx, nn);

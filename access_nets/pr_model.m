@@ -88,4 +88,4 @@ figure(2)
 plot(lossvar,pdfVar)
 
 %%
-% save prmodel lossdB pdfTot cdfTot pdfVar lossvar Nsplice Nconn1 Nconn2 meandist maxdist
+% save results/prmodel lossdB pdfTot cdfTot pdfVar lossvar Nsplice Nconn1 Nconn2 meandist maxdist

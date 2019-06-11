@@ -1,27 +1,32 @@
 function [ber, sim, mpam, Tx, Fibers, Rx] = ...
 pam_access_nets_qsub(RsGbd, M, fiberLengthKm, wavelengthnm, ModBWGHz, modulator, ...
-levels, amplified, gain, RecBWGHz, equalization, BERtarget, fc, auto)
+levels, amplified, gain, RecBWGHz, equalization, BERtarget, PtxdBm, fc, savedata)
 %% Calculate BER of IM-DD system using M-PAM
 % - Equalization is done using a fractionally spaced linear equalizer
 % Simulations include modulator, fiber, optical amplifier (optional) characterized 
 % only by gain and noise figure, optical bandpass filter, antialiasing 
 % filter, sampling, and linear equalization
+% savedata - 0: no, 1: interactive, 2: autoskip, 3: rewrite
 
 %% Transmit power swipe
-switch(M)
-    case 2
-        Tx.PtxdBm = -35:-25; % transmitter power range
-%         Tx.PtxdBm = -35:-20;
-    case 4
-        Tx.PtxdBm = -30:-15;
-    case 8
-%         Tx.PtxdBm = -15:-5;
-        Tx.PtxdBm = -25:-5;
-        
-    case 3
-        Tx.PtxdBm = -30:-20;
+if exist('PtxdBm','var')
+    Tx.PtxdBm = PtxdBm;
+else
+    switch(M)
+        case 2
+            Tx.PtxdBm = -35:-25; % transmitter power range
+    %         Tx.PtxdBm = -35:-20;
+        case 4
+            Tx.PtxdBm = -30:-15;
+        case 8
+    %         Tx.PtxdBm = -15:-5;
+            Tx.PtxdBm = -25:-5;
+
+        case 3
+            Tx.PtxdBm = -30:-20;
+    end
+    % Tx.PtxdBm = -15;
 end
-% Tx.PtxdBm = -15;
 Tx.PtxdBm = reshape(Tx.PtxdBm,[],1);
 % Tx.PtxdBm = -22.5;
 %% Simulation parameters
@@ -66,7 +71,11 @@ else
 end
 sim.posteq = ~strcmp(posteq,'none');
 
-sim.save = false;
+if exist('savedata','var')
+    sim.save = savedata;
+else
+    sim.save = false;
+end
  
 if sim.save
     params.lamb = wavelengthnm;
@@ -83,35 +92,41 @@ if sim.save
     if exist('fc','var')
     params.fc = fc;
     end
-    folder = 'C:/Users/Elaine/Documents/MATLAB/optical-comm/access_nets/results/precomp/';
+    folder = 'C:/Users/Elaine/Documents/MATLAB/optical-comm/access_nets/results/';
     subfolder = sprintf('%dGbd/%dPAM/',RsGbd,M);
     if ~exist([folder subfolder],'dir')
         mkdir([folder subfolder])
     end
     filename = name(params,M,gain,BERtarget);
     if exist([folder filename],'file')
-        if exist('auto','var') && auto
-            fprintf('simulation data file %s already exists, skipping\n',filename);
-            ret = true;
-        else
-            cont = input(sprintf('simulation data file %s already exists, rerun? (y/r/[n]): ',filename),'s');
-            switch cont
-                case 'y'  % new file name
-                    filename = check_filename([folder filename]);
-                    ret = false;
-                case 'r' % rewrite old file
-                    filename = [folder filename];
-                    ret = false;
-                otherwise
-                    ret = true;
-            end
-        end
-        if ret
-            load([folder filename],'ber')
-            return
+        switch sim.save
+            case 1
+                cont = input(sprintf('simulation data file %s already exists, rerun? (y/r/[n]): ',filename),'s');
+                switch cont
+                    case 'y'  % new file name
+                        filename = check_filename([folder filename]);
+                        ret = false;
+                    case 'r' % rewrite old file
+                        filename = [folder filename];
+                        ret = false;
+                    otherwise
+                        ret = true;
+                end
+            case 2
+                fprintf('simulation data file %s already exists, skipping\n',filename);
+                ret = true;
+            case 3
+                fprintf('rewriting data file %s\n', filename);
+                filename = [folder filename];
+                ret = false;
         end
     else
+        ret = false;
         filename = [folder filename];
+    end
+    if ret
+        load([folder filename],'ber')
+        return
     end
     disp(filename(length(folder)+1:end))
 end
@@ -131,10 +146,10 @@ sim.terminateWhenBERReaches0 = true; % stop simulation when counted BER reaches 
 sim.Plots = containers.Map();
 sim.Plots('BER') = 1;
 sim.Plots('DAC output') = 0;
-% if ~sim.posteq
-%     sim.Plots('Optical eye diagram') = 1;
-%     sim.Plots('Received signal eye diagram') = 1;
-% end
+if ~sim.posteq
+    sim.Plots('Optical eye diagram') = 1;
+    sim.Plots('Received signal eye diagram') = 1;
+end
 sim.Plots('Signal after equalization') = 0;
 sim.Plots('Equalizer') = 0;
 sim.Plots('Adaptation MSE') = 0;
@@ -292,7 +307,7 @@ end
 
 % check if there are enough symbols to perform simulation
 assert(Ndiscarded < sim.Nsymb, 'There arent enough symbols to perform simulation. Nsymb must be increased or Ndiscard must be reduced')
-fprintf('%d (2^%.2f) symbols will be used to calculated the BER\n', sim.Nsymb - Ndiscarded, log2(sim.Nsymb - Ndiscarded));
+% fprintf('%d (2^%.2f) symbols will be used to calculated the BER\n', sim.Nsymb - Ndiscarded, log2(sim.Nsymb - Ndiscarded));
 
 %% Calculate BER
 [ber, mpam, Rx.PD] = apd_ber(mpam, Tx, SMF, Rx.PD, Rx, sim);
