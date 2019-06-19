@@ -1,34 +1,20 @@
-%% 25 km, b2b
-if exist('results\preeq.mat','file')
-    load results\preeq.mat
-else
-    apdgain = 11:0.1:16;
-    M = [2 3 4];
-    L = [25 0];
-    [PreqdBm,ber20dbm] = deal(zeros(length(apdgain),length(M),length(L)));
-    for k=1:length(L)
-        for i=1:length(apdgain)
-            for j=1:length(M)
-                ber = pam_access_nets_qsub(30,M(j),L(k),1358,30,'MZM','optimized',2,apdgain(i),22,'precomp',1e-3,-20,0.8,0);
-                PreqdBm(i,j,k) = 10*log10(ber.preq*1e3);
-                ber20dbm(i,j,k) = ber.enum(end);
-            end
-        end
-    end
-    [minP, imin] = min(PreqdBm,[],1);
-    minP = squeeze(minP);
-    optgain = squeeze(apdgain(imin));
-% 
+%% 25 km CD precompensation with 10 km fiber
 
+load results/preeq.mat optgain
+
+if exist('results/mismatch.mat','file')
+    load results/mismatch
+else
     %% simulate with optimum APD gain
     PtxdBm = -35:-25;
     Poff = [0 5 6];
-    for k=length(L):-1:1
+    L = [10 0];
+
+    for k = length(L):-1:1
         for j=length(M):-1:1
-            ber(k,j) = pam_access_nets_qsub(30,M(j),L(k),1358,30,'MZM','optimized',2,optgain(j,k),22,'precomp',1e-3,PtxdBm+Poff(j),0.8,2);
+            ber(k,j) = pam_access_nets_qsub(30,M(j),L(k),1358,30,'MZM','optimized',2,optgain(j,1),22,'precomp25',1e-3,PtxdBm+Poff(j),0.8,3);
         end
     end
-
     %% receiver sensitivities
 
     BERtarget = [0.00145 0.0032 0.0052 0.0067 0.008 0.0095 0.012 0.015 0.016 0.019 0.032];
@@ -37,9 +23,9 @@ else
     Preqenum = zeros(length(BERtarget),length(M),length(L));
     Preq = zeros(length(BERtarget),length(M),length(L));
 
-    for im=1:length(M)
-        m = M(im);
-        for k=1:length(L) 
+    for k = 1:length(L)
+        for im=1:length(M)
+            m = M(im);
                 BERcount = ber(k,im).count;
                 BERenum = ber(k,im).enum;
                 PrxdBm = ber(k,im).PrxdBm;
@@ -64,28 +50,18 @@ else
     end
     hold off
 
-    % save('results/preeq.mat','M','L','apdgain','PreqdBm','ber20dbm','optgain','minP','ber','BERtarget','Preqenum','Preq','PtxdBm','Poff')
+    % save('results/mismatch.mat','M','L','ber','BERtarget','Preqenum','Preq','PtxdBm','Poff')
 end
-
-%%
-figure(1)
-plot(apdgain,PreqdBm(:,:,1))
-hold on
-set(gca,'colororderindex',1)    
-plot(apdgain,PreqdBm(:,:,2),'--')
-hold off
-grid on 
-xlabel('APD gain (dB)')
-ylabel('Receiver sensitivity (dBm)')
-legend('2-PAM 25km', '2DPS 3-PAM', '4-PAM','b2b','location','northwest')
-
 %%
 figure(3)
-plot(log10(BERtarget),Preq(:,:,1),'x-')
+preeq = load('results/preeq.mat','Preq');
+h0=plot(log10(BERtarget),preeq.Preq(:,:,1),'+-');
 hold on
 set(gca,'colororderindex',1)
-plot(log10(BERtarget),Preq(:,:,2),'x--')
-legend('OOK 25 km','2DPS 3-PAM','4-PAM', 'b2b')
+h1=plot(log10(BERtarget),preeq.Preq(:,:,2),'.');
+set(gca,'colororderindex',1)
+h2=plot(log10(BERtarget),Preq(:,:,1),'+:');
+legend([h0; h1(1); h2(1)],'OOK 25 km','2DPS 3-PAM','4-PAM', 'b2b','10km mismatch')
 grid on
 ylabel('P_{rec,req} (dBm)')
 xlabel('log_{10} BER')

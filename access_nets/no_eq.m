@@ -44,7 +44,7 @@ PtxdBm = -35:-25;
 Poff = [0 5 8];
 for k=length(L):-1:1
     for j=length(M):-1:1
-        ber(j,k) = pam_access_nets_qsub(30,M(j),L(k),1358,30,'MZM','optimized',2,optgain(j,k),22,'none',1e-3,PtxdBm+Poff(j),0.8,2);
+        ber(k,j) = pam_access_nets_qsub(30,M(j),L(k),1358,30,'MZM','optimized',2,optgain(j,k),22,'none',1e-3,PtxdBm+Poff(j),0.8,2);
     end
 end
 %% receiver sensitivities
@@ -58,9 +58,9 @@ Preq = zeros(length(BERtarget),length(M),length(L));
 for im=1:length(M)
     m = M(im);
     for k=1:length(L) 
-            BERcount = ber(im,k).count;
-            BERenum = ber(im,k).enum;
-            PrxdBm = ber(im,k).PrxdBm;
+            BERcount = ber(k,im).count;
+            BERenum = ber(k,im).enum;
+            PrxdBm = ber(k,im).PrxdBm;
             
             idx = find(BERenum <= 0.1 & BERenum >= 1e-4);
             for j=1:length(BERtarget)

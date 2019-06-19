@@ -48,7 +48,7 @@ if M~=3
 else
     sim.L = 4;
 end
-if strcmp(equalization, 'precomp')
+if ~isempty(regexp(equalization, 'precomp', 'once'))
     sim.ros.txDSP = 2; % oversampling ratio transmitter DSP (must be integer). DAC samping rate is sim.ros.txDSP*mpam.Rs
     sim.preemphasis = true;
     sim.preemphRange = 27e9;
@@ -58,6 +58,13 @@ if strcmp(equalization, 'precomp')
         sim.mzm_predistortion = 'none';
     end
     sim.CDeq = true;
+    numbers = regexp(equalization,'[0-9]');
+    if ~isempty(numbers)
+        sim.CDdist = str2num(equalization(numbers))*1e3;
+    else
+        sim.CDdist = [];
+    end
+        
     posteq = 'none';
 else
     sim.preemphasis = false;
